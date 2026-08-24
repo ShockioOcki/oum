@@ -41,7 +41,8 @@ sh <(wget -O - https://raw.githubusercontent.com/ShockioOcki/oum/main/oum.sh)
 ## Возможности
 
 - **Интернет и обход блокировок**: Podkop (+ watchdog v2 с каскадом
-  восстановления и тестом), Zapret (v1/v2/Zapret-Manager), AmneziaWG,
+  восстановления и тестом), Zapret через Zapret-Manager (всегда свежая
+  версия с GitHub), AmneziaWG,
   GearUP, блокировка QUIC (совместима с Zapret-Manager), GitHub
   hosts-fix с авто-применением при недоступности GitHub
 - **Сеть и Wi-Fi**: SSID/пароль, IPv6, Wi-Fi powersave fix
@@ -81,6 +82,5 @@ opkg (OpenWrt 21–23) и apk (OpenWrt 24+). Определяется автом
 - [Podkop](https://github.com/itdoginfo/podkop) — itdoginfo
 - [Zapret-Manager](https://github.com/StressOzz/Zapret-Manager) — StressOzz
   (FIX flow offloading, идея hosts-fix, QUIC-блок)
-- [Zapret-OpenWrt](https://github.com/remittor/zapret-openwrt) — remittor
 - [AWG OpenWrt](https://github.com/Slava-Shchipunov/awg-openwrt) — Slava-Shchipunov
 - [luci-theme-argon](https://github.com/jerrykuku/luci-theme-argon) — jerrykuku

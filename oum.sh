@@ -645,8 +645,8 @@ menu_primary() {
         echo "1) Установка необходимого ПО (база)"
         echo "2) Установка AmneziaWG"
         echo "3) Установка Podkop"
-        echo "4) Установка Zapret"
-        echo "5) Установить ВСЁ сразу (база + AWG + Podkop + Zapret v1)"
+        echo "4) Установка Zapret Manager (StressOzz)"
+        echo "5) Установить ВСЁ сразу (база + AWG + Podkop + Zapret Manager)"
         echo ""
         cecho "${YELLOW}Enter — Назад${NC}"
         choice=$(read_choice)
@@ -660,35 +660,21 @@ n"
             3) make_backup
                 safe_run_remote "https://raw.githubusercontent.com/itdoginfo/podkop/refs/heads/main/install.sh" "Podkop" "y"
                 pause ;;
-            4)
-                echo "1) Zapret v1 (remittor)"
-                echo "2) Zapret v2 (remittor)"
-                echo "3) Zapret Manager (StressOzz) — всегда свежая версия с GitHub"
-                [ -x /usr/bin/zms ] && cecho "   ${CYAN}(уже установлен: команда zms запускает его в любой момент)${NC}"
-                z=$(read_choice)
-                case "$z" in
-                    1) if fetch_file "https://raw.githubusercontent.com/remittor/zapret-openwrt/zap1/zapret/update-pkg.sh" /tmp/zap.sh && [ -s /tmp/zap.sh ]; then
-                           sh /tmp/zap.sh -u 1
-                       else
-                           cecho "${RED}❌ Не удалось скачать установщик Zapret.${NC}"
-                           log_msg "FAIL download zapret v1"
-                       fi ;;
-                    2) if fetch_file "https://raw.githubusercontent.com/remittor/zapret-openwrt/zap1/zapret/update-pkg.sh" /tmp/zap.sh && [ -s /tmp/zap.sh ]; then
-                           sh /tmp/zap.sh -u 2
-                       else
-                           cecho "${RED}❌ Не удалось скачать установщик Zapret.${NC}"
-                           log_msg "FAIL download zapret v2"
-                       fi ;;
-                    3) safe_run_remote "https://raw.githubusercontent.com/StressOzz/Zapret-Manager/main/Zapret-Manager.sh" "Zapret Manager" ;;
-                esac
-                pause ;;
+            4) if [ -x /usr/bin/zms ]; then
+                   cecho "${CYAN}Zapret Manager уже установлен (команда zms). Запускаю его...${NC}"
+                   zms
+               else
+                   make_backup
+                   safe_run_remote "https://raw.githubusercontent.com/StressOzz/Zapret-Manager/main/Zapret-Manager.sh" "Zapret Manager"
+               fi
+               pause ;;
             5)
                 make_backup
                 install_packages
                 safe_run_remote "https://raw.githubusercontent.com/Slava-Shchipunov/awg-openwrt/refs/heads/master/amneziawg-install.sh" "AmneziaWG" "y
 n"
                 safe_run_remote "https://raw.githubusercontent.com/itdoginfo/podkop/refs/heads/main/install.sh" "Podkop" "y"
-                fetch_file "https://raw.githubusercontent.com/remittor/zapret-openwrt/zap1/zapret/update-pkg.sh" /tmp/zap.sh && [ -s /tmp/zap.sh ] && sh /tmp/zap.sh -u 1
+                safe_run_remote "https://raw.githubusercontent.com/StressOzz/Zapret-Manager/main/Zapret-Manager.sh" "Zapret Manager"
                 cecho "${GREEN}✅ Всё установлено (см. сообщения выше по каждому компоненту).${NC}"
                 pause ;;
             *) cecho "${RED}Неверный выбор.${NC}" ;;
