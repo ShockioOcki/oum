@@ -1,13 +1,14 @@
 #!/bin/sh
 
-# ==================== OUM v7.2 — OpenWrt Ultimate Manager ====================
-OUM_VERSION="7.2"
+# ==================== OUM v7.3 — OpenWrt Ultimate Manager ====================
+OUM_VERSION="7.3"
+OUM_REPO_URL="https://raw.githubusercontent.com/ShockioOcki/oum/main/oum.sh"
 GREEN='\033[1;32m'; RED='\033[1;31m'; CYAN='\033[1;36m'; YELLOW='\033[1;33m'; NC='\033[0m'
 
 header() {
     clear
     echo -e "${CYAN}==================================================${NC}"
-    echo -e "${GREEN}       OUM v7.2 — OpenWrt Ultimate Manager        ${NC}"
+    echo -e "${GREEN}       OUM v7.3 — OpenWrt Ultimate Manager        ${NC}"
     echo -e "${CYAN}==================================================${NC}"
 }
 
@@ -2341,6 +2342,9 @@ run_diagnostics() {
         PROB=$((PROB + 1))
     fi
 
+    # 2.5 Системное время (кривые часы = мёртвый HTTPS)
+    check_time_sync || PROB=$((PROB + 1))
+
     # 3. WAN-интерфейс
     if ubus call network.interface.wan status 2>/dev/null | grep -q '"up": *true'; then
         echo -e "${GREEN}✅ WAN-интерфейс поднят${NC}"
@@ -2490,6 +2494,8 @@ CONFEOF
     fi
     OUM_UPDATE_URL=""
     . "$CONF"
+    # Если URL не задан в конфиге — используем официальный репозиторий
+    [ -z "$OUM_UPDATE_URL" ] && OUM_UPDATE_URL="$OUM_REPO_URL"
     if [ -z "$OUM_UPDATE_URL" ]; then
         echo -e "${YELLOW}URL обновления не задан.${NC}"
         echo "Залейте oum.sh в свой репозиторий и впишите в /etc/oum/oum.conf:"
@@ -2612,7 +2618,111 @@ menu_status() {
     pause
 }
 
+# ====================== Проверка системного времени (NTP) ======================
+# Кривые часы ломают HTTPS → все GitHub-скачивания OUM умирают с ошибкой
+# сертификатов. Проверяем рассинхрон с точным временем из HTTP-заголовка.
+check_time_sync() {
+    HN=$(date -u +%Y%m%d%H%M%S)
+    # HTTP-заголовок Date с любого крупного сервера — без TLS, без зависимостей
+    REMOTE=$(wget -S --spider -T 8 http://ya.ru 2>&1 | grep -i '^  Date:' | tail -n1 | sed 's/.*Date: //')
+    [ -z "$REMOTE" ] && REMOTE=$(wget -S --spider -T 8 http://cloudflare.com 2>&1 | grep -i '^  Date:' | tail -n1 | sed 's/.*Date: //')
+    if [ -z "$REMOTE" ]; then
+        echo -e "${YELLOW}⚠️  Не удалось получить точное время (нет сети?) — проверка пропущена.${NC}"
+        return 0
+    fi
+    # Парсим RFC-датy: "Mon, 24 Aug 2026 14:30:05 GMT" -> YYYYmmddHHMMSS
+    RY=$(echo "$REMOTE" | awk '{print $4}')
+    RD=$(echo "$REMOTE" | awk '{print $3}')
+    RT=$(echo "$REMOTE" | awk '{print $5}' | tr -d ':')
+    RMON=$(echo "$REMOTE" | awk '{print $2}' | case $(echo "$REMOTE" | awk '{print $2}') in
+        Jan) echo 01;; Feb) echo 02;; Mar) echo 03;; Apr) echo 04;; May) echo 05;; Jun) echo 06;;
+        Jul) echo 07;; Aug) echo 08;; Sep) echo 09;; Oct) echo 10;; Nov) echo 11;; Dec) echo 12;; *) echo 00;; esac)
+    [ "$RMON" = "00" ] && { echo -e "${YELLOW}⚠️  Не распознана дата сервера ($REMOTE).${NC}"; return 0; }
+    RNUM=$((RY * 10000000000 + RMON * 100000000 + RD * 1000000 + RT))
+    HNUM=$(date -u +%Y%m%d%H%M%S)
+    DIFF=$((HNUM - RNUM))
+    [ "$DIFF" -lt 0 ] && DIFF=$((-DIFF))
+    # > 300 секунд рассинхрона — HTTPS-сертификаты могут не приниматься
+    if [ "$DIFF" -gt 300 ]; then
+        echo -e "${RED}❌ Время роутера рассинхронизировано на ${DIFF} сек — HTTPS/скачивания будут падать.${NC}"
+        echo -e "${YELLOW}   Лечится: System -> Time Synchronization в LuCI, или:/etc/init.d/sysntpd restart${NC}"
+        log_msg "WARN time drift ${DIFF}s"
+        return 1
+    fi
+    echo -e "${GREEN}✅ Системное время синхронизировано (рассинхрон ${DIFF} сек).${NC}"
+    return 0
+}
+
+# ====================== CLI-режим (без меню) ======================
+# oum.sh status | diag | log [N] | version — для скриптов, cron и удалённого
+# администрирования. Любой неизвестный аргумент — интерактивное меню.
+cli_mode() {
+    case "$1" in
+        status)
+            echo "OUM v$OUM_VERSION — $(detect_router_model)"
+            echo "Uptime: $(uptime 2>/dev/null)"
+            dashboard
+            echo ""
+            podkop_alive && echo "Podkop: работает" || echo "Podkop: остановлен"
+            net_ok && echo "Внешняя сеть: доступна" || echo "Внешняя сеть: НЕДОСТУПНА"
+            crontab -l 2>/dev/null | grep -q podkop-watchdog.sh && echo "Watchdog: установлен" || echo "Watchdog: не установлен"
+            quic_block_enabled && echo "QUIC-блок: включён" || echo "QUIC-блок: выключен"
+            exit 0
+            ;;
+        diag)
+            run_diagnostics
+            exit 0
+            ;;
+        log)
+            N=${2:-30}
+            case "$N" in ''|*[!0-9]*) N=30 ;; esac
+            if [ -f /etc/oum/oum.log ]; then
+                tail -n "$N" /etc/oum/oum.log
+            elif [ -f /var/log/oum/oum.log ]; then
+                tail -n "$N" /var/log/oum/oum.log
+            else
+                echo "Лог пуст."
+            fi
+            exit 0
+            ;;
+        version)
+            echo "OUM v$OUM_VERSION"
+            exit 0
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+# ====================== Установка команды oum ======================
+oum_install_cmd() {
+    header
+    SCRIPT_PATH=$(readlink -f "$0" 2>/dev/null || echo "$0")
+    echo -e "${YELLOW}Текущий путь скрипта: $SCRIPT_PATH${NC}"
+    if [ "$SCRIPT_PATH" != "/usr/bin/oum" ]; then
+        cp "$SCRIPT_PATH" /usr/bin/oum
+        chmod +x /usr/bin/oum
+    fi
+    # Прописываем URL самообновления на наш репозиторий
+    mkdir -p /etc/oum
+    if [ -f /etc/oum/oum.conf ] && grep -q "^OUM_UPDATE_URL=" /etc/oum/oum.conf; then
+        sed -i "s|^OUM_UPDATE_URL=.*|OUM_UPDATE_URL=$OUM_REPO_URL|" /etc/oum/oum.conf
+    else
+        echo "OUM_UPDATE_URL=$OUM_REPO_URL" >> /etc/oum/oum.conf
+    fi
+    log_msg "OK oum installed as /usr/bin/oum"
+    echo -e "${GREEN}✅ Готово. Теперь запускайте командой: oum${NC}"
+    echo -e "${CYAN}CLI-режим: oum status | oum diag | oum log | oum version${NC}"
+    echo -e "${CYAN}Самообновление: меню «Диагностика и обслуживание» → обновления OUM${NC}"
+    pause
+}
+
 # ====================== Главное меню ======================
+# CLI-режим (read-only) доступен без root; интерактивное меню — только root
+if cli_mode "$@"; then
+    exit 0
+fi
 check_root
 
 while true; do
@@ -2626,6 +2736,7 @@ while true; do
     echo "5) Система (драйверы, темы LuCI)"
     echo "6) Диагностика и обслуживание (бэкапы, обновление, удаление)"
     echo "7) Быстрый статус"
+    echo "8) Установить команду oum (запуск без пути + CLI)"
     echo ""
     echo -e "${YELLOW}Enter — Выход из скрипта${NC}"
     choice=$(read_choice)
@@ -2638,6 +2749,7 @@ while true; do
         5) menu_system ;;
         6) menu_maintenance ;;
         7) menu_status ;;
+        8) oum_install_cmd ;;
         "")
             echo -e "${YELLOW}Выход из OUM? (Enter = да)${NC}"
             read -r confirm
