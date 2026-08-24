@@ -1,7 +1,7 @@
 #!/bin/sh
 
-# ==================== OUM v7.3.1 — OpenWrt Ultimate Manager ====================
-OUM_VERSION="7.3.1"
+# ==================== OUM v7.3.2 — OpenWrt Ultimate Manager ====================
+OUM_VERSION="7.3.2"
 OUM_REPO_URL="https://raw.githubusercontent.com/ShockioOcki/oum/main/oum.sh"
 GREEN='\033[1;32m'; RED='\033[1;31m'; CYAN='\033[1;36m'; YELLOW='\033[1;33m'; NC='\033[0m'
 
@@ -13,7 +13,7 @@ cecho() { printf '%b\n' "$*"; }
 header() {
     clear 2>/dev/null
     cecho "${CYAN}==================================================${NC}"
-    cecho "${GREEN}       OUM v7.3.1 — OpenWrt Ultimate Manager       ${NC}"
+    cecho "${GREEN}       OUM v7.3.2 — OpenWrt Ultimate Manager       ${NC}"
     cecho "${CYAN}==================================================${NC}"
 }
 
@@ -263,12 +263,49 @@ install_packages() {
 }
 
 # ====================== Podkop: общие проверки ======================
-# ВАЖНО: pgrep -f podkop нельзя использовать — он матчит сам watchdog
-# (podkop-watchdog.sh) и любые процессы со словом podkop в cmdline.
-# Живость = статус init-скрипта ИЛИ процесс sing-box (ядро podkop).
+# Архитектура podkop: /etc/init.d/podkop запускает wrapper /usr/bin/podkop
+# start, который настраивает nft-таблицу PodkopTable + ip rule, стартует
+# ОТДЕЛЬНУЮ службу /etc/init.d/sing-box и ЗАВЕРШАЕТСЯ. Поэтому:
+#  - /etc/init.d/podkop status врёт «остановлен» даже при работающем podkop;
+#  - pgrep -f podkop бесполезен (wrapper не живёт, а имя матчит watchdog);
+#  - реальное ядро — процесс sing-box; реальный перехват — nft PodkopTable.
+PODKOP_NFT_TABLE="PodkopTable"
+
+podkop_core_alive() {
+    pgrep -x sing-box >/dev/null 2>&1 && return 0
+    /etc/init.d/sing-box status >/dev/null 2>&1 && return 0
+    ps w 2>/dev/null | grep -v grep | grep -q "sing-box run" && return 0
+    return 1
+}
+
+podkop_rules_present() {
+    nft list table inet "$PODKOP_NFT_TABLE" >/dev/null 2>&1 && return 0
+    ip rule show 2>/dev/null | grep -q "lookup podkop" && return 0
+    return 1
+}
+
+# Составное состояние: PODKOP_STATE=0 работает / 1 чёрная дыра / 2 остановлен
+podkop_state() {
+    C=0; R=0
+    podkop_core_alive && C=1
+    podkop_rules_present && R=1
+    if [ "$C" = "1" ] && [ "$R" = "1" ]; then
+        PODKOP_STATE=0
+    elif [ "$R" = "1" ]; then
+        PODKOP_STATE=1
+    elif [ "$C" = "1" ]; then
+        PODKOP_STATE=3
+    else
+        PODKOP_STATE=2
+    fi
+    return "$PODKOP_STATE"
+}
+
+# Для «жив ли вообще» (дашборд и пр.): всё, кроме полной остановки
 podkop_alive() {
-    /etc/init.d/podkop status >/dev/null 2>&1 && return 0
-    pgrep -x sing-box >/dev/null 2>&1
+    podkop_core_alive && return 0
+    podkop_rules_present && return 0
+    return 1
 }
 
 net_ok() {
@@ -278,16 +315,17 @@ net_ok() {
 
 podkop_check() {
     A=0; B=0
-    podkop_alive && A=1
+    podkop_core_alive && A=1
     net_ok && B=1
     if [ "$A" = "1" ] && [ "$B" = "1" ]; then
-        cecho "${GREEN}✅ Podkop работает, интернет есть.${NC}"
+        cecho "${GREEN}✅ Podkop работает (sing-box жив), интернет есть.${NC}"
         return 0
     elif [ "$A" = "1" ]; then
-        cecho "${RED}❌ Процесс podkop жив, но внешняя сеть не отвечает — возможно, завис sing-box или зависли правила.${NC}"
+        cecho "${RED}❌ Ядро podkop (sing-box) живо, но внешняя сеть не отвечает — зависшие правила или проблема выше (провайдер).${NC}"
         return 1
     else
-        cecho "${RED}❌ Podkop не запущен.${NC}"
+        cecho "${RED}❌ Ядро podkop (sing-box) не запущено.${NC}"
+        podkop_rules_present && cecho "${RED}   При этом nft/ip rule перехвата остались — трафик уходит в чёрную дыру. Нужен рестарт podkop.${NC}"
         return 1
     fi
 }
@@ -381,8 +419,9 @@ _podkop_full_cascade() {
 #  - «WAN жив» проверяется пингом ШЛЮЗА провайдера, а не внешних IP
 #    (если правила podkop глушат трафик, внешние пинги тоже мертвы —
 #    v1 в этом случае молчал, хотя это его сценарий);
-#  - живость = init-статус или процесс sing-box (pgrep -f врал: матчил
-#    сам watchdog);
+#  - живость = процесс sing-box (ядро podkop), 3 способа детекта:
+#    /etc/init.d/podkop status врёт (wrapper завершается после настройки),
+#    pgrep -f podkop матчит сам watchdog;
 #  - НИКАКИХ скачиваний/переустановок: в аварийном состоянии сеть может
 #    быть сломана, а слепой `install.sh | sh` делает только хуже;
 #  - финальный шаг: stop (НЕ disable) + флаг в /tmp — после физической
@@ -432,10 +471,13 @@ if ! ping -c 1 -W 2 "$GW" >/dev/null 2>&1; then
     exit 0
 fi
 
-# --- Живость podkop: init-статус ИЛИ процесс sing-box ---
+# --- Живость podkop: ядро = процесс sing-box (несколько способов ---
+# --- детекта, т.к. /etc/init.d/podkop status врёт: wrapper завершается) ---
 podkop_alive() {
-    /etc/init.d/podkop status >/dev/null 2>&1 && return 0
-    pgrep -x sing-box >/dev/null 2>&1
+    pgrep -x sing-box >/dev/null 2>&1 && return 0
+    /etc/init.d/sing-box status >/dev/null 2>&1 && return 0
+    ps w 2>/dev/null | grep -v grep | grep -q "sing-box run" && return 0
+    return 1
 }
 # --- Внешняя сеть доступна? ---
 net_ok() {
@@ -892,26 +934,26 @@ menu_hw_accel() {
         header
         cecho "${CYAN}=== Аппаратное ускорение (flow offloading) ===${NC}"
         if [ "$(uci -q get firewall.@defaults[0].flow_offloading)" = "1" ]; then
-            echo "Software offloading: ${GREEN}включён${NC}"
+            cecho "Software offloading: ${GREEN}включён${NC}"
         else
-            echo "Software offloading: ${YELLOW}выключен${NC}"
+            cecho "Software offloading: ${YELLOW}выключен${NC}"
         fi
         if [ "$(uci -q get firewall.@defaults[0].flow_offloading_hw)" = "1" ]; then
-            echo "Hardware offloading: ${GREEN}включён${NC}"
+            cecho "Hardware offloading: ${GREEN}включён${NC}"
         else
-            echo "Hardware offloading: ${YELLOW}выключен${NC}"
+            cecho "Hardware offloading: ${YELLOW}выключен${NC}"
         fi
         if hw_accel_supported; then
-            echo "Чипсет: ${GREEN}похоже, поддерживает hardware offload${NC}"
+            cecho "Чипсет: ${GREEN}похоже, поддерживает hardware offload${NC}"
         else
-            echo "Чипсет: ${YELLOW}признаков hardware offload не найдено (доступен только software)${NC}"
+            cecho "Чипсет: ${YELLOW}признаков hardware offload не найдено (доступен только software)${NC}"
         fi
         if hw_offload_fix_applied; then
-            echo "FIX для DPI-обхода (Zapret): ${GREEN}применён${NC}"
+            cecho "FIX для DPI-обхода (Zapret): ${GREEN}применён${NC}"
         elif hw_offload_fix_available; then
-            echo "FIX для DPI-обхода (Zapret): ${YELLOW}не применён${NC}"
+            cecho "FIX для DPI-обхода (Zapret): ${YELLOW}не применён${NC}"
         elif [ -f "$FW4_TEMPLATE" ]; then
-            echo "FIX для DPI-обхода (Zapret): ${YELLOW}неприменим (шаблон firewall4 отличается)${NC}"
+            cecho "FIX для DPI-обхода (Zapret): ${YELLOW}неприменим (шаблон firewall4 отличается)${NC}"
         fi
         FO_ON=0
         [ "$(uci -q get firewall.@defaults[0].flow_offloading)" = "1" ] && FO_ON=1
@@ -1810,10 +1852,12 @@ quic_block_toggle() {
 # Строка ключевых статусов: ● работает/включено, ○ нет.
 dashboard() {
     DASH="Podkop "
-    if podkop_alive; then
+    if podkop_core_alive; then
         DASH="$DASH${GREEN}●${NC}"
+    elif podkop_rules_present; then
+        DASH="$DASH${RED}●${NC}"
     else
-        DASH="$DASH${RED}○${NC}"
+        DASH="$DASH${YELLOW}○${NC}"
     fi
     DASH="$DASH  Zapret "
     if /etc/init.d/zapret status >/dev/null 2>&1 || pgrep -x nfqws >/dev/null 2>&1 || pgrep -x tpws >/dev/null 2>&1; then
@@ -1851,9 +1895,9 @@ menu_internet() {
         echo "2) Podkop: watchdog и каскад восстановления"
         echo "3) GearUP Booster: установка и настройка"
         if quic_block_enabled; then
-            echo "4) Блокировка QUIC (UDP 80/443): ${GREEN}включена${NC} — выключить"
+            cecho "4) Блокировка QUIC (UDP 80/443): ${GREEN}включена${NC} — выключить"
         else
-            echo "4) Блокировка QUIC (UDP 80/443): ${YELLOW}выключена${NC} — включить"
+            cecho "4) Блокировка QUIC (UDP 80/443): ${YELLOW}выключена${NC} — включить"
         fi
         cecho "   ${CYAN}(рекомендуется при использовании Zapret: YouTube уходит с QUIC на TCP)${NC}"
         echo ""
@@ -1879,9 +1923,9 @@ menu_network() {
         echo "2) Отключить IPv6"
         echo "3) Отключить Wi-Fi powersave (лечит обрывы под нагрузкой)"
         if github_hosts_fix_applied; then
-            echo "4) GitHub hosts-fix: ${GREEN}применён${NC} — снять"
+            cecho "4) GitHub hosts-fix: ${GREEN}применён${NC} — снять"
         else
-            echo "4) GitHub hosts-fix: ${YELLOW}не применён${NC} — применить (если GitHub недоступен)"
+            cecho "4) GitHub hosts-fix: ${YELLOW}не применён${NC} — применить (если GitHub недоступен)"
         fi
         echo ""
         cecho "${YELLOW}Enter — Назад${NC}"
@@ -1917,9 +1961,9 @@ menu_resilience() {
         header
         cecho "${CYAN}=== Podkop: отказоустойчивость ===${NC}"
         if crontab -l 2>/dev/null | grep -q podkop-watchdog.sh; then
-            echo "Watchdog: ${GREEN}установлен${NC}"
+            cecho "Watchdog: ${GREEN}установлен${NC}"
         else
-            echo "Watchdog: ${YELLOW}не установлен${NC}"
+            cecho "Watchdog: ${YELLOW}не установлен${NC}"
         fi
         if [ -f /tmp/podkop_watchdog/fail_count ]; then
             echo "Неудачных проверок подряд: $(cat /tmp/podkop_watchdog/fail_count)"
@@ -1957,14 +2001,14 @@ menu_nas_media() {
         header
         cecho "${CYAN}=== NAS и медиа ===${NC}"
         if /etc/init.d/ksmbd status >/dev/null 2>&1; then
-            echo "NAS (SMB): ${GREEN}активен${NC}"
+            cecho "NAS (SMB): ${GREEN}активен${NC}"
         else
-            echo "NAS (SMB): ${YELLOW}не настроен/выключен${NC}"
+            cecho "NAS (SMB): ${YELLOW}не настроен/выключен${NC}"
         fi
         if crontab -l 2>/dev/null | grep -q media-organizer-watch.sh; then
-            echo "Медиа-сортировщик: ${GREEN}установлен${NC}"
+            cecho "Медиа-сортировщик: ${GREEN}установлен${NC}"
         else
-            echo "Медиа-сортировщик: ${YELLOW}не установлен${NC}"
+            cecho "Медиа-сортировщик: ${YELLOW}не установлен${NC}"
         fi
         echo ""
         echo "1) NAS / Медиасервер (SMB + aria2 + AriaNg) — установка/перенастройка"
@@ -2360,19 +2404,24 @@ run_diagnostics() {
 
     # 4. Podkop
     PODKOP_ON=0
-    if podkop_alive; then
-        PODKOP_ON=1
-        cecho "${GREEN}✅ Podkop активен${NC}"
-    else
-        cecho "${YELLOW}— Podkop не активен${NC}"
-        # Остаточные правила: служба мертва, а ip rule/nft до сих пор
-        # заворачивают трафик в таблицу podkop — интернет «пропадает целиком»
-        if ip rule show 2>/dev/null | grep -q "lookup podkop"; then
-            cecho "${RED}❌ Podkop не работает, но его ip rule остались (lookup podkop) — трафик уходит в чёрную дыру${NC}"
-            cecho "${RED}   Лечение: остановить podkop и перезапустить firewall + network (или перезагрузить роутер).${NC}"
+    podkop_state
+    case "$PODKOP_STATE" in
+        0)
+            PODKOP_ON=1
+            cecho "${GREEN}✅ Podkop активен (перехват + sing-box)${NC}"
+            ;;
+        1)
+            cecho "${RED}❌ Podkop: ЧЁРНАЯ ДЫРА — nft/ip rule перехвата остались, sing-box мёртв${NC}"
+            cecho "${RED}   Трафик уходит в пустую таблицу. Лечение: рестарт podkop или перезагрузка.${NC}"
             PROB=$((PROB + 1))
-        fi
-    fi
+            ;;
+        3)
+            cecho "${YELLOW}— Podkop: sing-box работает, правила перехвата не найдены (частично)${NC}"
+            ;;
+        *)
+            cecho "${YELLOW}— Podkop не активен${NC}"
+            ;;
+    esac
 
     # 5. Zapret
     ZAPRET_INSTALLED=0; ZAPRET_ON=0
@@ -2571,60 +2620,58 @@ menu_status() {
     if [ -n "$NASDIR" ] && [ -d "$NASDIR" ]; then
         df -h "$NASDIR" 2>/dev/null | tail -n 1 | awk '{print "NAS-диск: "$3" / "$2" ("$5") — "$6}'
     fi
-    pgrep guplugin >/dev/null && echo "GearUP: ${GREEN}работает${NC}" || echo "GearUP: ${RED}не запущен${NC}"
-    if podkop_alive; then
-        echo "Podkop: ${GREEN}активен${NC}"
-    elif [ -f /etc/init.d/podkop ]; then
-        echo "Podkop: ${RED}остановлен${NC}"
-    else
-        echo "Podkop: ${YELLOW}не найден${NC}"
-    fi
-    if ! podkop_alive && ip rule show 2>/dev/null | grep -q "lookup podkop"; then
-        cecho "${RED}  ⚠️  Podkop не работает, но в ip rule осталась его таблица — возможна чёрная дыра трафика. Диагностика (меню 6 → 1).${NC}"
-    fi
-    /etc/init.d/ksmbd status >/dev/null 2>&1 && echo "NAS (SMB): ${GREEN}активен${NC}" || echo "NAS (SMB): ${RED}выключен/не найден${NC}"
+    pgrep guplugin >/dev/null && cecho "GearUP: ${GREEN}работает${NC}" || cecho "GearUP: ${RED}не запущен${NC}"
+    podkop_state
+    case "$PODKOP_STATE" in
+        0) cecho "Podkop: ${GREEN}активен (перехват + sing-box)${NC}" ;;
+        1) cecho "Podkop: ${RED}ЧЁРНАЯ ДЫРА — nft/ip rule перехвата остались, sing-box мёртв${NC}"
+           cecho "${RED}  Трафик уходит в пустую таблицу. Лечение: рестарт podkop (меню 1 → 2 → 5) или перезагрузка.${NC}" ;;
+        3) cecho "Podkop: ${YELLOW}частично — sing-box работает, правила перехвата не найдены${NC}" ;;
+        *) cecho "Podkop: ${YELLOW}остановлен${NC}" ;;
+    esac
+    /etc/init.d/ksmbd status >/dev/null 2>&1 && cecho "NAS (SMB): ${GREEN}активен${NC}" || cecho "NAS (SMB): ${RED}выключен/не найден${NC}"
     if crontab -l 2>/dev/null | grep -q media-organizer-watch.sh; then
         if [ -s /etc/oum/tmdb_api_key ]; then
-            echo "Медиа-сортировщик: ${GREEN}установлен, TMDB-ключ задан${NC}"
+            cecho "Медиа-сортировщик: ${GREEN}установлен, TMDB-ключ задан${NC}"
         else
-            echo "Медиа-сортировщик: ${YELLOW}установлен, TMDB-ключ НЕ задан${NC}"
+            cecho "Медиа-сортировщик: ${YELLOW}установлен, TMDB-ключ НЕ задан${NC}"
         fi
     else
-        echo "Медиа-сортировщик: ${YELLOW}не установлен${NC}"
+        cecho "Медиа-сортировщик: ${YELLOW}не установлен${NC}"
     fi
     if crontab -l 2>/dev/null | grep -q podkop-watchdog.sh; then
         if [ -f /tmp/podkop_watchdog/stopped ]; then
-            echo "Podkop watchdog: ${RED}остановил podkop — нужен сброс или перезагрузка${NC}"
+            cecho "Podkop watchdog: ${RED}остановил podkop — нужен сброс или перезагрузка${NC}"
         elif [ -f /tmp/podkop_watchdog/fail_count ]; then
-            echo "Podkop watchdog: ${YELLOW}неудач подряд: $(cat /tmp/podkop_watchdog/fail_count)${NC}"
+            cecho "Podkop watchdog: ${YELLOW}неудач подряд: $(cat /tmp/podkop_watchdog/fail_count)${NC}"
         else
-            echo "Podkop watchdog: ${GREEN}установлен и активен${NC}"
+            cecho "Podkop watchdog: ${GREEN}установлен и активен${NC}"
         fi
     else
-        echo "Podkop watchdog: ${YELLOW}не установлен${NC}"
+        cecho "Podkop watchdog: ${YELLOW}не установлен${NC}"
     fi
     if [ "$(uci -q get firewall.@defaults[0].flow_offloading)" = "1" ]; then
-        echo "Software offloading: ${GREEN}включён${NC}"
+        cecho "Software offloading: ${GREEN}включён${NC}"
     else
-        echo "Software offloading: ${YELLOW}выключен${NC}"
+        cecho "Software offloading: ${YELLOW}выключен${NC}"
     fi
     if [ "$(uci -q get firewall.@defaults[0].flow_offloading_hw)" = "1" ]; then
-        echo "Hardware offloading: ${GREEN}включён${NC}"
+        cecho "Hardware offloading: ${GREEN}включён${NC}"
     else
-        echo "Hardware offloading: ${YELLOW}выключен${NC}"
+        cecho "Hardware offloading: ${YELLOW}выключен${NC}"
     fi
     if grep -q 'ct original packets ge 30 flow offload @ft;' /usr/share/firewall4/templates/ruleset.uc 2>/dev/null; then
-        echo "Flow Offloading FIX: ${GREEN}применён${NC}"
+        cecho "Flow Offloading FIX: ${GREEN}применён${NC}"
     elif [ -f /usr/share/firewall4/templates/ruleset.uc ]; then
-        echo "Flow Offloading FIX: ${YELLOW}не применён${NC}"
+        cecho "Flow Offloading FIX: ${YELLOW}не применён${NC}"
     fi
     if quic_block_enabled; then
-        echo "Блокировка QUIC: ${GREEN}включена${NC}"
+        cecho "Блокировка QUIC: ${GREEN}включена${NC}"
     else
-        echo "Блокировка QUIC: ${YELLOW}выключена${NC}"
+        cecho "Блокировка QUIC: ${YELLOW}выключена${NC}"
     fi
-    github_hosts_fix_applied && echo "GitHub hosts-fix: ${GREEN}применён${NC}"
-    [ -x /usr/bin/zms ] && echo "Zapret Manager (zms): ${GREEN}установлен${NC}"
+    github_hosts_fix_applied && cecho "GitHub hosts-fix: ${GREEN}применён${NC}"
+    [ -x /usr/bin/zms ] && cecho "Zapret Manager (zms): ${GREEN}установлен${NC}"
     echo ""
     echo "ip rule (первые 15 строк):"
     ip rule show | head -n 15
@@ -2684,7 +2731,13 @@ cli_mode() {
             echo "Uptime: $(uptime 2>/dev/null)"
             dashboard
             echo ""
-            podkop_alive && echo "Podkop: работает" || echo "Podkop: остановлен"
+            podkop_state
+            case "$PODKOP_STATE" in
+                0) echo "Podkop: активен (перехват + sing-box)" ;;
+                1) echo "Podkop: ЧЁРНАЯ ДЫРА (правила перехвата остались, sing-box мёртв)" ;;
+                3) echo "Podkop: частично (sing-box жив, правил нет)" ;;
+                *) echo "Podkop: остановлен" ;;
+            esac
             net_ok && echo "Внешняя сеть: доступна" || echo "Внешняя сеть: НЕДОСТУПНА"
             crontab -l 2>/dev/null | grep -q podkop-watchdog.sh && echo "Watchdog: установлен" || echo "Watchdog: не установлен"
             quic_block_enabled && echo "QUIC-блок: включён" || echo "QUIC-блок: выключен"
