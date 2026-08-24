@@ -1219,8 +1219,6 @@ TV_EPISODE_PATTERNS = [
 ]
 
 def sanitize_filename(name):
-    """Убирает символы, недопустимые в именах файлов на Windows/NTFS/SMB,
-    чтобы файлы были видны и открывались через сетевой проводник и ТВ-плееры."""
     name = name.replace(':', ' -')
     name = re.sub(r'[\\/*?"<>|]', '', name)
     name = re.sub(r'\s+', ' ', name).strip()
@@ -1228,8 +1226,6 @@ def sanitize_filename(name):
 
 
 def safe_move(src, dest_path):
-    """Переносит файл, не перезаписывая существующий: при конфликте имени
-    добавляет суффикс (2), (3) и т.д. к имени файла."""
     if not os.path.exists(dest_path):
         shutil.move(src, dest_path)
         return dest_path
@@ -1251,21 +1247,10 @@ def clean_search_term(name):
     name = re.sub(junk_pattern, '', name)
     return name.replace('.', ' ').strip(' -_')
 
-# TMDB иногда возвращает generic-заглушку вместо реального названия серии
-# ("Episode 5" по-английски, "Эпизод 5" на русском при language=ru-RU) —
-# такую заглушку добавлять к имени файла бессмысленно, лучше её просто
-# отбросить и оставить только номер сезона/серии.
 GENERIC_EP_TITLE_RE = re.compile(r'(?i)^(episode|эпизод)\s*\d+$')
-
-# Папка "Season N"/"Сезон N" сама по себе не название сериала — если файл
-# лежит в такой подпапке (downloads/Шоу/Season 2/файл.mkv), нужно название
-# из папки НАД ней, а не из "Season 2".
 SEASON_FOLDER_RE = re.compile(r'(?i)^(s|season|сезон)\s*\.?\s*\d{1,2}$')
 
 def resolve_show_name_from_path(filepath, matched_group1, source_dir):
-    """Возвращает название сериала: из имени файла (если regex его выделил),
-    иначе поднимается по дереву папок мимо "Season N"-подпапок до первой
-    осмысленной директории, но не выше source_dir."""
     if matched_group1 and matched_group1.strip():
         return matched_group1.strip()
 
@@ -1279,13 +1264,10 @@ def resolve_show_name_from_path(filepath, matched_group1, source_dir):
         if name and not SEASON_FOLDER_RE.match(name.strip()):
             return name
         d = os.path.dirname(d)
-    # ничего осмысленного не нашли — возвращаем то, что было изначально
     return os.path.basename(os.path.dirname(filepath))
 
 
 def cleanup_empty_dirs(base_dir):
-    """Удаляет опустевшие после переноса файлов папки внутри base_dir
-    (саму base_dir не трогает)."""
     for root, dirs, files in os.walk(base_dir, topdown=False):
         if os.path.normpath(root) == os.path.normpath(base_dir):
             continue
@@ -1299,8 +1281,6 @@ TMDB_HOST = "api.themoviedb.org"
 _TMDB_IP_CACHE = None
 
 def resolve_tmdb_ip():
-    """Резолвим TMDB через публичный DNS (1.1.1.1), в обход возможного
-    fake-ip локального резолвера (например, если стоит podkop/AdGuard и т.п.)."""
     global _TMDB_IP_CACHE
     if _TMDB_IP_CACHE:
         return _TMDB_IP_CACHE
@@ -1440,6 +1420,20 @@ if __name__ == "__main__":
     cleanup_empty_dirs(target)
 PYEOF
     chmod +x /usr/bin/media-organizer.py
+
+    # Проверка синтаксиса сразу после развёртывания: побитый файл не
+    # должен молча доживать до первого запуска по крону
+    # (cfile в /tmp, чтобы не мусорить __pycache__ в /usr/bin)
+    if python3 -c "import py_compile; py_compile.compile('/usr/bin/media-organizer.py', cfile='/tmp/oum_mo.pyc', doraise=True)" 2>/tmp/oum_pycompile.err; then
+        rm -f /tmp/oum_pycompile.err /tmp/oum_mo.pyc
+        cecho "${GREEN}✅ media-organizer.py: синтаксис проверен (py_compile).${NC}"
+    else
+        cecho "${RED}❌ media-organizer.py: ОШИБКА СИНТАКСИСА — файл побит при записи!${NC}"
+        cat /tmp/oum_pycompile.err
+        rm -f /tmp/oum_pycompile.err /tmp/oum_mo.pyc
+        log_msg "FAIL media_organizer deploy: py_compile error"
+        return 1
+    fi
 
     cat << 'WATCHEOF' > /usr/bin/media-organizer-watch.sh
 #!/bin/sh
