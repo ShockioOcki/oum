@@ -40,7 +40,7 @@ sh <(wget -O - https://raw.githubusercontent.com/ShockioOcki/oum/main/oum.sh)
 
 ## Возможности
 
-- **Интернет и обход блокировок**: Podkop (+ watchdog v2 с каскадом
+- **Интернет и обход блокировок**: Podkop (+ watchdog v3 с каскадом
   восстановления и тестом), Zapret через Zapret-Manager (всегда свежая
   версия с GitHub), AmneziaWG,
   GearUP, блокировка QUIC (совместима с Zapret-Manager), GitHub

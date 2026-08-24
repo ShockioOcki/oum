@@ -1,7 +1,7 @@
 #!/bin/sh
 
-# ==================== OUM v7.3.2 — OpenWrt Ultimate Manager ====================
-OUM_VERSION="7.3.2"
+# ==================== OUM v7.4 — OpenWrt Ultimate Manager ====================
+OUM_VERSION="7.4"
 OUM_REPO_URL="https://raw.githubusercontent.com/ShockioOcki/oum/main/oum.sh"
 GREEN='\033[1;32m'; RED='\033[1;31m'; CYAN='\033[1;36m'; YELLOW='\033[1;33m'; NC='\033[0m'
 
@@ -13,7 +13,7 @@ cecho() { printf '%b\n' "$*"; }
 header() {
     clear 2>/dev/null
     cecho "${CYAN}==================================================${NC}"
-    cecho "${GREEN}       OUM v7.3.2 — OpenWrt Ultimate Manager       ${NC}"
+    cecho "${GREEN}       OUM v7.4 — OpenWrt Ultimate Manager       ${NC}"
     cecho "${CYAN}==================================================${NC}"
 }
 
@@ -309,19 +309,28 @@ podkop_alive() {
 }
 
 net_ok() {
+    # Прямой ICMP — идёт МИМО tproxy-перехвата, доказывает только линк
     ping -c 1 -W 3 1.1.1.1 >/dev/null 2>&1 && return 0
     ping -c 1 -W 3 8.8.8.8 >/dev/null 2>&1
 }
 
+# Энд-ту-энд проверка прокси-цепочки podkop: ресурс, который в РФ доступен
+# ТОЛЬКО через работающий обход. Русские сайты и ICMP-пинги НЕ годятся как
+# маркер здоровья podkop: при «лёгком» режиме RU-трафик и пинги идут
+# напрямую и работают всегда — даже когда прокси мёртв.
+proxied_ok() {
+    wget -q -T 8 --spider "https://www.youtube.com/generate_204" 2>/dev/null && return 0
+    wget -q -T 8 --spider "https://x.com" 2>/dev/null && return 0
+    return 1
+}
+
 podkop_check() {
-    A=0; B=0
-    podkop_core_alive && A=1
-    net_ok && B=1
-    if [ "$A" = "1" ] && [ "$B" = "1" ]; then
-        cecho "${GREEN}✅ Podkop работает (sing-box жив), интернет есть.${NC}"
+    if podkop_core_alive && proxied_ok; then
+        cecho "${GREEN}✅ Podkop работает: sing-box жив, заблокированный ресурс открывается через прокси-цепочку.${NC}"
         return 0
-    elif [ "$A" = "1" ]; then
-        cecho "${RED}❌ Ядро podkop (sing-box) живо, но внешняя сеть не отвечает — зависшие правила или проблема выше (провайдер).${NC}"
+    elif podkop_core_alive; then
+        cecho "${RED}❌ sing-box жив, но заблокированный ресурс (youtube/x.com) НЕ открывается — прокси-цепочка не работает (конфиг/нода/DPI).${NC}"
+        cecho "${YELLOW}   Прямой канал при этом может работать: RU-сайты идут мимо прокси.${NC}"
         return 1
     else
         cecho "${RED}❌ Ядро podkop (sing-box) не запущено.${NC}"
@@ -411,14 +420,18 @@ _podkop_full_cascade() {
     _podkop_pause
 }
 
-# ====================== Автоматический watchdog Podkop v2 (cron) ======================
-# Принципы v2 (переработан после инцидентов с v1):
+# ====================== Автоматический watchdog Podkop v3 (cron) ======================
+# Принципы v3 (переработка после инцидентов v1/v2):
 #  - одновременный запуск исключён lock-каталогом с проверкой живости PID
 #    (v1 мог запуститься дважды, когда шаг «обновление» длился > 5 минут,
 #    и за пару циклов сам себя эскалировал до отключения);
 #  - «WAN жив» проверяется пингом ШЛЮЗА провайдера, а не внешних IP
 #    (если правила podkop глушат трафик, внешние пинги тоже мертвы —
 #    v1 в этом случае молчал, хотя это его сценарий);
+#  - здоровье = sing-box жив + ЗАБЛОКИРОВАННЫЙ ресурс открывается
+#    end-to-end (youtube/x.com). RU-сайты и ICMP-пинги не годятся:
+#    при «лёгком» podkop они идут напрямую и работают всегда, даже
+#    когда прокси мёртв — v2 на этом давал ложно-зелёный статус;
 #  - живость = процесс sing-box (ядро podkop), 3 способа детекта:
 #    /etc/init.d/podkop status врёт (wrapper завершается после настройки),
 #    pgrep -f podkop матчит сам watchdog;
@@ -479,33 +492,37 @@ podkop_alive() {
     ps w 2>/dev/null | grep -v grep | grep -q "sing-box run" && return 0
     return 1
 }
-# --- Внешняя сеть доступна? ---
-net_ok() {
-    ping -c 1 -W 3 1.1.1.1 >/dev/null 2>&1 && return 0
-    ping -c 1 -W 3 8.8.8.8 >/dev/null 2>&1
+# --- Прокси-цепочка работает? Энд-ту-энд: заблокированный ресурс. ---
+# ВАЖНО: RU-сайты и ICMP-пинги не годятся — при «лёгком» podkop они
+# идут напрямую и отвечают всегда, даже когда прокси мёртв. Маркер
+# здоровья — ресурс, доступный в РФ только через обход.
+proxied_ok() {
+    wget -q -T 8 --spider "https://www.youtube.com/generate_204" 2>/dev/null && return 0
+    wget -q -T 8 --spider "https://x.com" 2>/dev/null && return 0
+    return 1
 }
 
-if podkop_alive && net_ok; then
+if podkop_alive && proxied_ok; then
     rm -f "$FAIL_FILE"
     exit 0
 fi
 
 A=0; B=0
 podkop_alive && A=1
-net_ok && B=1
+proxied_ok && B=1
 
 FAIL=0
 [ -f "$FAIL_FILE" ] && FAIL=$(cat "$FAIL_FILE")
 FAIL=$((FAIL + 1))
 echo "$FAIL" > "$FAIL_FILE"
-log "проверка не прошла (podkop=$A, внешняя сеть=$B), неудача №$FAIL подряд"
+log "проверка не прошла (sing-box=$A, обход заблокированного ресурса=$B), неудача №$FAIL подряд"
 
 if [ "$FAIL" -eq 1 ]; then
     log "шаг 1: рестарт podkop"
     /etc/init.d/podkop restart
     sleep 20
-    if podkop_alive && net_ok; then
-        log "шаг 1 помог — podkop восстановлен"
+    if podkop_alive && proxied_ok; then
+        log "шаг 1 помог — обход восстановлен"
         rm -f "$FAIL_FILE"
     else
         log "шаг 1 не помог"
@@ -520,8 +537,8 @@ if [ "$FAIL" -eq 2 ]; then
     sleep 3
     /etc/init.d/podkop start
     sleep 30
-    if podkop_alive && net_ok; then
-        log "шаг 2 помог — podkop восстановлен"
+    if podkop_alive && proxied_ok; then
+        log "шаг 2 помог — обход восстановлен"
         rm -f "$FAIL_FILE"
     else
         log "шаг 2 не помог"
@@ -547,9 +564,10 @@ WDEOF
     ( crontab -l 2>/dev/null | grep -v podkop-watchdog.sh ; echo "*/$wdint * * * * /usr/bin/podkop-watchdog.sh" ) | crontab -
     /etc/init.d/cron restart
 
-    log_msg "podkop watchdog v2 installed (cron */$wdint)"
-    cecho "${GREEN}✅ Watchdog v2 установлен (крон: каждые $wdint мин).${NC}"
+    log_msg "podkop watchdog v3 installed (cron */$wdint)"
+    cecho "${GREEN}✅ Watchdog v3 установлен (крон: каждые $wdint мин).${NC}"
     cecho "${CYAN}Каскад: рестарт → firewall+рестарт → стоп до перезагрузки. Без автообновлений.${NC}"
+    cecho "${CYAN}Проверка здоровья: заблокированный ресурс (youtube/x.com), не RU-сайты и не пинги.${NC}"
     cecho "${YELLOW}Проверьте работу: меню отказоустойчивости → «ТЕСТ watchdog» (уронит и оживит podkop).${NC}"
     cecho "${YELLOW}Лог: /etc/oum/oum.log (строки [watchdog]).${NC}"
     pause
@@ -624,8 +642,8 @@ watchdog_test() {
 
     echo "4/4: Итог:"
     rm -f /tmp/podkop_watchdog/fail_count
-    if podkop_alive && net_ok; then
-        cecho "${GREEN}✅ ТЕСТ ПРОЙДЕН: watchdog обнаружил падение и оживил podkop.${NC}"
+    if podkop_alive && proxied_ok; then
+        cecho "${GREEN}✅ ТЕСТ ПРОЙДЕН: watchdog обнаружил падение и оживил podkop (обход работает).${NC}"
         log_msg "OK watchdog_test passed"
     else
         cecho "${RED}❌ ТЕСТ ПРОВАЛЕН: podkop не поднялся. Смотрим лог выше и каскад вручную.${NC}"
@@ -1953,7 +1971,7 @@ menu_resilience() {
             cecho "${RED}Вернуть: пункт 6 (сброс) или перезагрузка роутера.${NC}"
         fi
         echo ""
-        echo "1) Watchdog: установить / обновить до v2 (по крону)"
+        echo "1) Watchdog: установить / обновить до v3 (по крону)"
         echo "2) Watchdog: удалить"
         echo "3) Проверить podkop сейчас (живость + внешняя сеть)"
         echo "4) ТЕСТ watchdog: уронить podkop → watchdog должен оживить (~1 мин)"
@@ -2475,22 +2493,23 @@ run_diagnostics() {
         fi
     fi
 
-    # 13. Сквозной HTTPS: ICMP проходит, а TCP/TLS? (различает DPI/прокси
-    # от проблем линка)
+    # 13. Прямой HTTPS (RU-ресурс: идёт МИМО прокси даже при «лёгком» podkop —
+    # проверяет прямой канал, а не обход)
     if wget -q -T 8 --spider "https://ya.ru" 2>/dev/null; then
-        cecho "${GREEN}✅ HTTPS работает (ya.ru отвечает)${NC}"
+        cecho "${GREEN}✅ Прямой HTTPS работает (ya.ru, RU-трафик мимо прокси)${NC}"
     else
-        cecho "${RED}❌ HTTPS до ya.ru не проходит при живом ICMP — режется TCP/DPI либо сломан прокси-перехват${NC}"
+        cecho "${RED}❌ HTTPS до ya.ru не проходит при живом ICMP — TCP режется (линк/DPI), либо перехват глушит и прямой трафик${NC}"
         PROB=$((PROB + 1))
     fi
 
-    # 14. End-to-end обход: открывается ли заблокированный ресурс
+    # 14. End-to-end обход: заблокированный ресурс доступен ТОЛЬКО через
+    # работающую цепочку (RU-ресурсы и пинги тут не показатель)
     if [ "$PODKOP_ON" = "1" ] || [ "$ZAPRET_ON" = "1" ]; then
-        if wget -q -T 10 --spider "https://www.youtube.com" 2>/dev/null; then
-            cecho "${GREEN}✅ Обход работает end-to-end: YouTube доступен${NC}"
+        if proxied_ok; then
+            cecho "${GREEN}✅ Обход работает end-to-end: заблокированный ресурс доступен${NC}"
         else
-            cecho "${RED}❌ Перехват активен, но YouTube НЕ открывается — обход не работает${NC}"
-            cecho "${RED}   (стратегия/DPI, конфиг sing-box, или заблокирован и прокси тоже)${NC}"
+            cecho "${RED}❌ Перехват активен, но заблокированный ресурс НЕ открывается — обход не работает${NC}"
+            cecho "${RED}   (стратегия/DPI, конфиг sing-box, нода, или ресурс временно лёг)${NC}"
             PROB=$((PROB + 1))
         fi
     fi
@@ -2817,7 +2836,10 @@ cli_mode() {
                 3) echo "Podkop: частично (sing-box жив, правил нет)" ;;
                 *) echo "Podkop: остановлен" ;;
             esac
-            net_ok && echo "Внешняя сеть: доступна" || echo "Внешняя сеть: НЕДОСТУПНА"
+            net_ok && echo "Прямой канал (ICMP): работает" || echo "Прямой канал (ICMP): недоступен"
+            if podkop_core_alive; then
+                proxied_ok && echo "Прокси-цепочка (заблокированный ресурс): работает" || echo "Прокси-цепочка: НЕ работает"
+            fi
             crontab -l 2>/dev/null | grep -q podkop-watchdog.sh && echo "Watchdog: установлен" || echo "Watchdog: не установлен"
             quic_block_enabled && echo "QUIC-блок: включён" || echo "QUIC-блок: выключен"
             exit 0
