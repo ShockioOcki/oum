@@ -1,19 +1,24 @@
 #!/bin/sh
 
-# ==================== OUM v7.3 — OpenWrt Ultimate Manager ====================
-OUM_VERSION="7.3"
+# ==================== OUM v7.3.1 — OpenWrt Ultimate Manager ====================
+OUM_VERSION="7.3.1"
 OUM_REPO_URL="https://raw.githubusercontent.com/ShockioOcki/oum/main/oum.sh"
 GREEN='\033[1;32m'; RED='\033[1;31m'; CYAN='\033[1;36m'; YELLOW='\033[1;33m'; NC='\033[0m'
 
+# Переносимый цветной вывод: builtin echo в busybox ash НЕ интерпретирует
+# \033 (на роутерах цвета печатались как literal "\033[1;31m"). Поэтому весь
+# вывод с escape-последовательностями идёт через printf %b.
+cecho() { printf '%b\n' "$*"; }
+
 header() {
-    clear
-    echo -e "${CYAN}==================================================${NC}"
-    echo -e "${GREEN}       OUM v7.3 — OpenWrt Ultimate Manager        ${NC}"
-    echo -e "${CYAN}==================================================${NC}"
+    clear 2>/dev/null
+    cecho "${CYAN}==================================================${NC}"
+    cecho "${GREEN}       OUM v7.3.1 — OpenWrt Ultimate Manager       ${NC}"
+    cecho "${CYAN}==================================================${NC}"
 }
 
 pause() {
-    echo -e "\n${YELLOW}Нажмите [Enter] для продолжения...${NC}"
+    cecho "\n${YELLOW}Нажмите [Enter] для продолжения...${NC}"
     read -r _
 }
 
@@ -23,7 +28,7 @@ read_choice() {
 }
 
 check_root() {
-    [ "$(id -u)" -ne 0 ] && { echo -e "${RED}❌ Запускайте от root!${NC}"; exit 1; }
+    [ "$(id -u)" -ne 0 ] && { cecho "${RED}❌ Запускайте от root!${NC}"; exit 1; }
 }
 
 # Бэкапы храним в /etc/oum/backups (overlay — переживает перезагрузку),
@@ -32,22 +37,22 @@ BACKUP_DIR="/etc/oum/backups"
 BACKUP_KEEP=5
 
 make_backup() {
-    echo -e "${YELLOW}Создаём бэкап конфигурации...${NC}"
+    cecho "${YELLOW}Создаём бэкап конфигурации...${NC}"
     mkdir -p "$BACKUP_DIR"
     FREE_KB=$(df -Pk /etc 2>/dev/null | awk 'NR==2{print $4}')
     if [ -n "$FREE_KB" ] && [ "$FREE_KB" -lt 2048 ]; then
-        echo -e "${YELLOW}⚠️  Мало места в постоянной памяти (overlay): ${FREE_KB} KB — старые бэкапы лучше удалить (Обслуживание → 4).${NC}"
+        cecho "${YELLOW}⚠️  Мало места в постоянной памяти (overlay): ${FREE_KB} KB — старые бэкапы лучше удалить (Обслуживание → 4).${NC}"
     fi
     BACKUP_FILE="$BACKUP_DIR/oum_backup_$(date +%Y%m%d_%H%M).tar.gz"
     sysupgrade -b "$BACKUP_FILE" 2>/dev/null || tar -czf "$BACKUP_FILE" /etc/config /etc/rc.local /etc/init.d 2>/dev/null
     if [ -s "$BACKUP_FILE" ]; then
-        echo -e "${GREEN}✅ Бэкап сохранён: $BACKUP_FILE ($(du -h "$BACKUP_FILE" | cut -f1)) — переживает перезагрузку.${NC}"
+        cecho "${GREEN}✅ Бэкап сохранён: $BACKUP_FILE ($(du -h "$BACKUP_FILE" | cut -f1)) — переживает перезагрузку.${NC}"
         ls -1t "$BACKUP_DIR"/oum_backup_*.tar.gz 2>/dev/null | tail -n +$((BACKUP_KEEP + 1)) | while IFS= read -r old; do
             rm -f "$old"
         done
         log_msg "OK backup $(basename "$BACKUP_FILE")"
     else
-        echo -e "${RED}❌ Не удалось создать бэкап.${NC}"
+        cecho "${RED}❌ Не удалось создать бэкап.${NC}"
         log_msg "FAIL backup creation"
     fi
 }
@@ -82,7 +87,7 @@ pkg_update() {
     case "$PKG_MANAGER" in
         opkg) opkg update ;;
         apk)  apk update ;;
-        *) echo -e "${RED}❌ Неизвестный пакетный менеджер (ни opkg, ни apk не найдены).${NC}"; return 1 ;;
+        *) cecho "${RED}❌ Неизвестный пакетный менеджер (ни opkg, ни apk не найдены).${NC}"; return 1 ;;
     esac
 }
 
@@ -91,7 +96,7 @@ pkg_install() {
     case "$PKG_MANAGER" in
         opkg) opkg install "$@" ;;
         apk)  apk add --no-cache "$@" ;;
-        *) echo -e "${RED}❌ Неизвестный пакетный менеджер (ни opkg, ни apk не найдены).${NC}"; return 1 ;;
+        *) cecho "${RED}❌ Неизвестный пакетный менеджер (ни opkg, ни apk не найдены).${NC}"; return 1 ;;
     esac
 }
 
@@ -119,7 +124,7 @@ pkg_install_local() {
     case "$PKG_MANAGER" in
         opkg) opkg install "$1" ;;
         apk)  apk add --allow-untrusted "$1" ;;
-        *) echo -e "${RED}❌ Неизвестный пакетный менеджер.${NC}"; return 1 ;;
+        *) cecho "${RED}❌ Неизвестный пакетный менеджер.${NC}"; return 1 ;;
     esac
 }
 
@@ -175,7 +180,7 @@ fetch_file() {
     case "$furl" in
         *github*)
             if ! github_hosts_fix_applied; then
-                echo -e "${YELLOW}GitHub не отвечает — применяем hosts-fix и повторяем...${NC}"
+                cecho "${YELLOW}GitHub не отвечает — применяем hosts-fix и повторяем...${NC}"
                 github_hosts_fix_apply && log_msg "github hosts-fix auto-applied"
                 wget -qO "$fdest" "$furl" && return 0
             fi
@@ -197,14 +202,14 @@ safe_run_remote() {
     tmpf="/tmp/oum_dl_$$.sh"
 
     if ! fetch_file "$url" "$tmpf"; then
-        echo -e "${RED}❌ Не удалось скачать $name (проверьте интернет).${NC}"
+        cecho "${RED}❌ Не удалось скачать $name (проверьте интернет).${NC}"
         log_msg "FAIL download $name from $url"
         rm -f "$tmpf"
         return 1
     fi
 
     if [ ! -s "$tmpf" ]; then
-        echo -e "${RED}❌ $name скачался пустым — прерываю установку.${NC}"
+        cecho "${RED}❌ $name скачался пустым — прерываю установку.${NC}"
         log_msg "FAIL empty file $name from $url"
         rm -f "$tmpf"
         return 1
@@ -212,7 +217,7 @@ safe_run_remote() {
 
     # Грубая проверка, что это не HTML-страница ошибки вместо скрипта
     if head -c 200 "$tmpf" | grep -qi "<html"; then
-        echo -e "${RED}❌ $name вернул HTML вместо скрипта (вероятно 404) — прерываю.${NC}"
+        cecho "${RED}❌ $name вернул HTML вместо скрипта (вероятно 404) — прерываю.${NC}"
         log_msg "FAIL html-instead-of-script $name from $url"
         rm -f "$tmpf"
         return 1
@@ -228,11 +233,11 @@ safe_run_remote() {
     rm -f "$tmpf"
 
     if [ "$rc" -eq 0 ]; then
-        echo -e "${GREEN}✅ $name установлен.${NC}"
+        cecho "${GREEN}✅ $name установлен.${NC}"
         log_msg "OK install $name"
         return 0
     else
-        echo -e "${RED}❌ $name завершился с ошибкой (код $rc).${NC}"
+        cecho "${RED}❌ $name завершился с ошибкой (код $rc).${NC}"
         log_msg "FAIL install $name rc=$rc"
         return 1
     fi
@@ -242,16 +247,16 @@ safe_run_remote() {
 install_packages() {
     header
     if [ -z "$PKG_MANAGER" ]; then
-        echo -e "${RED}❌ Неизвестный пакетный менеджер.${NC}"; pause; return
+        cecho "${RED}❌ Неизвестный пакетный менеджер.${NC}"; pause; return
     fi
-    echo -e "${GREEN}Обнаружен $PKG_MANAGER${NC}"
+    cecho "${GREEN}Обнаружен $PKG_MANAGER${NC}"
     pkg_update
-    echo -e "${YELLOW}Устанавливаем пакеты...${NC}"
+    cecho "${YELLOW}Устанавливаем пакеты...${NC}"
     if pkg_install nano luci-i18n-base-ru procps-ng-watch curl ca-bundle unzip tar ip-full luci-app-firewall luci-i18n-firewall-ru; then
-        echo -e "${GREEN}✅ Пакеты установлены.${NC}"
+        cecho "${GREEN}✅ Пакеты установлены.${NC}"
         log_msg "OK install_packages"
     else
-        echo -e "${RED}❌ Ошибка установки одного или нескольких пакетов, проверьте вывод выше.${NC}"
+        cecho "${RED}❌ Ошибка установки одного или нескольких пакетов, проверьте вывод выше.${NC}"
         log_msg "FAIL install_packages"
     fi
     pause
@@ -276,13 +281,13 @@ podkop_check() {
     podkop_alive && A=1
     net_ok && B=1
     if [ "$A" = "1" ] && [ "$B" = "1" ]; then
-        echo -e "${GREEN}✅ Podkop работает, интернет есть.${NC}"
+        cecho "${GREEN}✅ Podkop работает, интернет есть.${NC}"
         return 0
     elif [ "$A" = "1" ]; then
-        echo -e "${RED}❌ Процесс podkop жив, но внешняя сеть не отвечает — возможно, завис sing-box или зависли правила.${NC}"
+        cecho "${RED}❌ Процесс podkop жив, но внешняя сеть не отвечает — возможно, завис sing-box или зависли правила.${NC}"
         return 1
     else
-        echo -e "${RED}❌ Podkop не запущен.${NC}"
+        cecho "${RED}❌ Podkop не запущен.${NC}"
         return 1
     fi
 }
@@ -291,16 +296,16 @@ podkop_check() {
 podkop_recover() {
     header
     if [ ! -f /etc/init.d/podkop ]; then
-        echo -e "${RED}❌ Podkop не найден на этой системе.${NC}"; pause; return
+        cecho "${RED}❌ Podkop не найден на этой системе.${NC}"; pause; return
     fi
 
-    echo -e "${CYAN}Каскад восстановления podkop:${NC}"
+    cecho "${CYAN}Каскад восстановления podkop:${NC}"
     echo "1) Рестарт службы"
     echo "2) Стоп → обновление sing-box и podkop → старт → проверка"
     echo "3) Приостановить podkop до физической перезагрузки (интернет без прокси)"
     echo "4) Выполнить весь каскад по порядку"
     echo ""
-    echo -e "${YELLOW}Enter — Назад${NC}"
+    cecho "${YELLOW}Enter — Назад${NC}"
     choice=$(read_choice)
 
     case "$choice" in
@@ -309,36 +314,36 @@ podkop_recover() {
         2) _podkop_stop_update_start ;;
         3) _podkop_pause ;;
         4) _podkop_full_cascade ;;
-        *) echo -e "${RED}Неверный выбор.${NC}" ;;
+        *) cecho "${RED}Неверный выбор.${NC}" ;;
     esac
     pause
 }
 
 _podkop_restart() {
-    echo -e "${YELLOW}Перезапуск podkop...${NC}"
+    cecho "${YELLOW}Перезапуск podkop...${NC}"
     /etc/init.d/podkop restart
     sleep 5
 }
 
 _podkop_stop_update_start() {
-    echo -e "${YELLOW}Останавливаем podkop...${NC}"
+    cecho "${YELLOW}Останавливаем podkop...${NC}"
     /etc/init.d/podkop stop
     sleep 1
 
-    echo -e "${YELLOW}Обновляем sing-box...${NC}"
+    cecho "${YELLOW}Обновляем sing-box...${NC}"
     pkg_update && pkg_install_force sing-box
 
-    echo -e "${YELLOW}Обновляем podkop...${NC}"
+    cecho "${YELLOW}Обновляем podkop...${NC}"
     safe_run_remote "https://raw.githubusercontent.com/itdoginfo/podkop/refs/heads/main/install.sh" "Podkop (обновление)" "y"
 
-    echo -e "${YELLOW}Запускаем podkop...${NC}"
+    cecho "${YELLOW}Запускаем podkop...${NC}"
     /etc/init.d/podkop start
     sleep 5
 
     if podkop_check; then
         return 0
     else
-        echo -e "${RED}Обновление не помогло.${NC}"
+        cecho "${RED}Обновление не помогло.${NC}"
         return 1
     fi
 }
@@ -347,24 +352,24 @@ _podkop_stop_update_start() {
 # и после физической перезагрузки podkop стартует сам. Флаг нужен, чтобы
 # установленный watchdog не пытался «оживить» то, что человек выключил.
 _podkop_pause() {
-    echo -e "${YELLOW}Приостанавливаем podkop (до физической перезагрузки роутера)...${NC}"
+    cecho "${YELLOW}Приостанавливаем podkop (до физической перезагрузки роутера)...${NC}"
     /etc/init.d/podkop stop
     mkdir -p /tmp/podkop_watchdog
     touch /tmp/podkop_watchdog/stopped
     log_msg "podkop paused until physical reboot"
-    echo -e "${GREEN}✅ Podkop остановлен. Базовый интернет (без прокси) должен работать.${NC}"
-    echo -e "${YELLOW}После перезагрузки роутера podkop запустится сам. Запустить сразу: пункт «Сброс» в меню отказоустойчивости.${NC}"
+    cecho "${GREEN}✅ Podkop остановлен. Базовый интернет (без прокси) должен работать.${NC}"
+    cecho "${YELLOW}После перезагрузки роутера podkop запустится сам. Запустить сразу: пункт «Сброс» в меню отказоустойчивости.${NC}"
 }
 
 _podkop_full_cascade() {
-    echo -e "${CYAN}Шаг 1: рестарт${NC}"
+    cecho "${CYAN}Шаг 1: рестарт${NC}"
     _podkop_restart
     if podkop_check; then return 0; fi
 
-    echo -e "${CYAN}Шаг 2: стоп + обновление + старт${NC}"
+    cecho "${CYAN}Шаг 2: стоп + обновление + старт${NC}"
     if _podkop_stop_update_start; then return 0; fi
 
-    echo -e "${CYAN}Шаг 3: приостановка до физической перезагрузки${NC}"
+    cecho "${CYAN}Шаг 3: приостановка до физической перезагрузки${NC}"
     _podkop_pause
 }
 
@@ -384,7 +389,7 @@ _podkop_full_cascade() {
 #    перезагрузки podkop стартует сам, watchdog сбрасывается.
 install_podkop_watchdog() {
     header
-    [ -f /etc/init.d/podkop ] || { echo -e "${RED}❌ Сначала установите Podkop.${NC}"; pause; return; }
+    [ -f /etc/init.d/podkop ] || { cecho "${RED}❌ Сначала установите Podkop.${NC}"; pause; return; }
     make_backup
 
     cat << 'WDEOF' > /usr/bin/podkop-watchdog.sh
@@ -501,10 +506,10 @@ WDEOF
     /etc/init.d/cron restart
 
     log_msg "podkop watchdog v2 installed (cron */$wdint)"
-    echo -e "${GREEN}✅ Watchdog v2 установлен (крон: каждые $wdint мин).${NC}"
-    echo -e "${CYAN}Каскад: рестарт → firewall+рестарт → стоп до перезагрузки. Без автообновлений.${NC}"
-    echo -e "${YELLOW}Проверьте работу: меню отказоустойчивости → «ТЕСТ watchdog» (уронит и оживит podkop).${NC}"
-    echo -e "${YELLOW}Лог: /etc/oum/oum.log (строки [watchdog]).${NC}"
+    cecho "${GREEN}✅ Watchdog v2 установлен (крон: каждые $wdint мин).${NC}"
+    cecho "${CYAN}Каскад: рестарт → firewall+рестарт → стоп до перезагрузки. Без автообновлений.${NC}"
+    cecho "${YELLOW}Проверьте работу: меню отказоустойчивости → «ТЕСТ watchdog» (уронит и оживит podkop).${NC}"
+    cecho "${YELLOW}Лог: /etc/oum/oum.log (строки [watchdog]).${NC}"
     pause
 }
 
@@ -515,7 +520,7 @@ uninstall_podkop_watchdog() {
     rm -f /usr/bin/podkop-watchdog.sh
     rm -rf /tmp/podkop_watchdog
     log_msg "podkop watchdog uninstalled"
-    echo -e "${GREEN}✅ Watchdog удалён из cron и с роутера.${NC}"
+    cecho "${GREEN}✅ Watchdog удалён из cron и с роутера.${NC}"
     pause
 }
 
@@ -523,9 +528,9 @@ uninstall_podkop_watchdog() {
 watchdog_resume() {
     header
     if [ ! -f /etc/init.d/podkop ]; then
-        echo -e "${RED}❌ Podkop не установлен.${NC}"; pause; return
+        cecho "${RED}❌ Podkop не установлен.${NC}"; pause; return
     fi
-    echo -e "${YELLOW}Сбрасываем состояние watchdog и запускаем podkop...${NC}"
+    cecho "${YELLOW}Сбрасываем состояние watchdog и запускаем podkop...${NC}"
     rm -f /tmp/podkop_watchdog/fail_count /tmp/podkop_watchdog/stopped
     /etc/init.d/podkop enable 2>/dev/null
     /etc/init.d/podkop start
@@ -533,26 +538,26 @@ watchdog_resume() {
     if podkop_check; then
         log_msg "OK watchdog_resume"
     else
-        echo -e "${YELLOW}Podkop не поднялся — запустите каскад восстановления.${NC}"
+        cecho "${YELLOW}Podkop не поднялся — запустите каскад восстановления.${NC}"
     fi
     pause
 }
 
 watchdog_test() {
     header
-    echo -e "${CYAN}=== ТЕСТ watchdog: уронить podkop → watchdog должен оживить ===${NC}"
+    cecho "${CYAN}=== ТЕСТ watchdog: уронить podkop → watchdog должен оживить ===${NC}"
     if [ ! -x /usr/bin/podkop-watchdog.sh ]; then
-        echo -e "${RED}❌ Watchdog не установлен (пункт 1).${NC}"; pause; return
+        cecho "${RED}❌ Watchdog не установлен (пункт 1).${NC}"; pause; return
     fi
     if [ -f /tmp/podkop_watchdog/stopped ]; then
-        echo -e "${RED}❌ Podkop остановлен watchdog'ом — сначала сброс (пункт 6).${NC}"; pause; return
+        cecho "${RED}❌ Podkop остановлен watchdog'ом — сначала сброс (пункт 6).${NC}"; pause; return
     fi
     if ! podkop_alive; then
-        echo -e "${RED}❌ Podkop сейчас и так не запущен — тест не показателен. Сначала пункт 6 (сброс).${NC}"; pause; return
+        cecho "${RED}❌ Podkop сейчас и так не запущен — тест не показателен. Сначала пункт 6 (сброс).${NC}"; pause; return
     fi
     GW=$(route -n 2>/dev/null | awk '$1=="0.0.0.0"{print $2; exit}')
     if [ -z "$GW" ] || ! ping -c 1 -W 2 "$GW" >/dev/null 2>&1; then
-        echo -e "${RED}❌ Шлюз провайдера недоступен — watchdog в тесте корректно ничего не сделает. Тест отменён.${NC}"; pause; return
+        cecho "${RED}❌ Шлюз провайдера недоступен — watchdog в тесте корректно ничего не сделает. Тест отменён.${NC}"; pause; return
     fi
 
     echo "1/4: Уроним podkop (stop + kill sing-box, как при реальном падении)..."
@@ -560,17 +565,17 @@ watchdog_test() {
     pkill -x sing-box 2>/dev/null
     sleep 1
     if podkop_alive; then
-        echo -e "${RED}❌ Не удалось уронить podkop — тест прерван, запускаю обратно.${NC}"
+        cecho "${RED}❌ Не удалось уронить podkop — тест прерван, запускаю обратно.${NC}"
         /etc/init.d/podkop start
         pause; return
     fi
-    echo -e "  ${YELLOW}podkop мёртв ✔${NC}"
+    cecho "  ${YELLOW}podkop мёртв ✔${NC}"
 
     echo "2/4: Запускаем watchdog (один прогон, ~30 секунд, ждите)..."
     rm -f /tmp/podkop_watchdog/fail_count
     LOG_BEFORE=$(wc -l < /etc/oum/oum.log 2>/dev/null || echo 0)
     /usr/bin/podkop-watchdog.sh
-    echo -e "  ${YELLOW}watchdog отработал ✔${NC}"
+    cecho "  ${YELLOW}watchdog отработал ✔${NC}"
 
     echo "3/4: Что записал watchdog в лог:"
     tail -n +$((LOG_BEFORE + 1)) /etc/oum/oum.log 2>/dev/null | sed 's/^/  /'
@@ -578,11 +583,11 @@ watchdog_test() {
     echo "4/4: Итог:"
     rm -f /tmp/podkop_watchdog/fail_count
     if podkop_alive && net_ok; then
-        echo -e "${GREEN}✅ ТЕСТ ПРОЙДЕН: watchdog обнаружил падение и оживил podkop.${NC}"
+        cecho "${GREEN}✅ ТЕСТ ПРОЙДЕН: watchdog обнаружил падение и оживил podkop.${NC}"
         log_msg "OK watchdog_test passed"
     else
-        echo -e "${RED}❌ ТЕСТ ПРОВАЛЕН: podkop не поднялся. Смотрим лог выше и каскад вручную.${NC}"
-        echo -e "${YELLOW}Поднимаю podkop принудительно...${NC}"
+        cecho "${RED}❌ ТЕСТ ПРОВАЛЕН: podkop не поднялся. Смотрим лог выше и каскад вручную.${NC}"
+        cecho "${YELLOW}Поднимаю podkop принудительно...${NC}"
         /etc/init.d/podkop start
         sleep 5
         podkop_check
@@ -601,7 +606,7 @@ menu_primary() {
         echo "4) Установка Zapret"
         echo "5) Установить ВСЁ сразу (база + AWG + Podkop + Zapret v1)"
         echo ""
-        echo -e "${YELLOW}Enter — Назад${NC}"
+        cecho "${YELLOW}Enter — Назад${NC}"
         choice=$(read_choice)
         case "$choice" in
             "") break ;;
@@ -617,19 +622,19 @@ n"
                 echo "1) Zapret v1 (remittor)"
                 echo "2) Zapret v2 (remittor)"
                 echo "3) Zapret Manager (StressOzz) — всегда свежая версия с GitHub"
-                [ -x /usr/bin/zms ] && echo -e "   ${CYAN}(уже установлен: команда zms запускает его в любой момент)${NC}"
+                [ -x /usr/bin/zms ] && cecho "   ${CYAN}(уже установлен: команда zms запускает его в любой момент)${NC}"
                 z=$(read_choice)
                 case "$z" in
                     1) if fetch_file "https://raw.githubusercontent.com/remittor/zapret-openwrt/zap1/zapret/update-pkg.sh" /tmp/zap.sh && [ -s /tmp/zap.sh ]; then
                            sh /tmp/zap.sh -u 1
                        else
-                           echo -e "${RED}❌ Не удалось скачать установщик Zapret.${NC}"
+                           cecho "${RED}❌ Не удалось скачать установщик Zapret.${NC}"
                            log_msg "FAIL download zapret v1"
                        fi ;;
                     2) if fetch_file "https://raw.githubusercontent.com/remittor/zapret-openwrt/zap1/zapret/update-pkg.sh" /tmp/zap.sh && [ -s /tmp/zap.sh ]; then
                            sh /tmp/zap.sh -u 2
                        else
-                           echo -e "${RED}❌ Не удалось скачать установщик Zapret.${NC}"
+                           cecho "${RED}❌ Не удалось скачать установщик Zapret.${NC}"
                            log_msg "FAIL download zapret v2"
                        fi ;;
                     3) safe_run_remote "https://raw.githubusercontent.com/StressOzz/Zapret-Manager/main/Zapret-Manager.sh" "Zapret Manager" ;;
@@ -642,9 +647,9 @@ n"
 n"
                 safe_run_remote "https://raw.githubusercontent.com/itdoginfo/podkop/refs/heads/main/install.sh" "Podkop" "y"
                 fetch_file "https://raw.githubusercontent.com/remittor/zapret-openwrt/zap1/zapret/update-pkg.sh" /tmp/zap.sh && [ -s /tmp/zap.sh ] && sh /tmp/zap.sh -u 1
-                echo -e "${GREEN}✅ Всё установлено (см. сообщения выше по каждому компоненту).${NC}"
+                cecho "${GREEN}✅ Всё установлено (см. сообщения выше по каждому компоненту).${NC}"
                 pause ;;
-            *) echo -e "${RED}Неверный выбор.${NC}" ;;
+            *) cecho "${RED}Неверный выбор.${NC}" ;;
         esac
     done
 }
@@ -659,28 +664,28 @@ menu_gearup() {
         echo "3) Сохранить привязку + сервис восстановления"
         echo "4) Выполнить ВСЕ шаги по порядку"
         echo ""
-        echo -e "${YELLOW}Enter — Назад${NC}"
+        cecho "${YELLOW}Enter — Назад${NC}"
         choice=$(read_choice)
         case "$choice" in
             "") break ;;
             1)
                 make_backup
-                echo -e "${YELLOW}Проверяем модуль kmod-tun...${NC}"
+                cecho "${YELLOW}Проверяем модуль kmod-tun...${NC}"
                 if ! pkg_is_installed kmod-tun; then
-                    echo -e "${YELLOW}kmod-tun не найден, устанавливаем...${NC}"
+                    cecho "${YELLOW}kmod-tun не найден, устанавливаем...${NC}"
                     pkg_update && pkg_install kmod-tun
                 fi
                 if [ ! -e /dev/net/tun ]; then
-                    echo -e "${RED}❌ /dev/net/tun недоступен — GearUP не будет работать на этой прошивке/ядре.${NC}"
+                    cecho "${RED}❌ /dev/net/tun недоступен — GearUP не будет работать на этой прошивке/ядре.${NC}"
                     pause; continue
                 fi
-                echo -e "${YELLOW}Устанавливаем GearUP (официальный метод: curl sdp.gg/op)...${NC}"
+                cecho "${YELLOW}Устанавливаем GearUP (официальный метод: curl sdp.gg/op)...${NC}"
                 if command -v curl >/dev/null 2>&1; then
                     curl sdp.gg/op | sh
                 else
                     wget -qO- sdp.gg/op | sh
                 fi
-                echo -e "${YELLOW}Если в выводе выше есть 'sn=' — установка прошла успешно.${NC}"
+                cecho "${YELLOW}Если в выводе выше есть 'sn=' — установка прошла успешно.${NC}"
                 pause ;;
             2)
                 make_backup
@@ -740,21 +745,21 @@ EOF
                 uci set firewall.@defaults[0].forward='ACCEPT'
                 uci commit firewall
                 /etc/init.d/firewall restart
-                echo -e "${GREEN}✅ Монитор запущен как procd-сервис (автоперезапуск при падении) + Firewall настроен.${NC}"
+                cecho "${GREEN}✅ Монитор запущен как procd-сервис (автоперезапуск при падении) + Firewall настроен.${NC}"
                 pause ;;
             3)
-                echo -e "${YELLOW}Вы уже привязали роутер в приложении GearUP? (y/n)${NC}"
+                cecho "${YELLOW}Вы уже привязали роутер в приложении GearUP? (y/n)${NC}"
                 read -p "Ответ: " bound
                 if [ "$bound" != "y" ] && [ "$bound" != "Y" ]; then
-                    echo -e "${RED}Сначала привяжите роутер в приложении!${NC}"
+                    cecho "${RED}Сначала привяжите роутер в приложении!${NC}"
                     pause; continue
                 fi
                 mkdir -p /etc/gearup_persist
                 if [ -d "/tmp/gu" ]; then
                     cp -r /tmp/gu /etc/gearup_persist/
-                    echo -e "${GREEN}✅ Привязка сохранена.${NC}"
+                    cecho "${GREEN}✅ Привязка сохранена.${NC}"
                 else
-                    echo -e "${RED}❌ /tmp/gu не найдена.${NC}"
+                    cecho "${RED}❌ /tmp/gu не найдена.${NC}"
                 fi
                 cat << 'EOF' > /etc/init.d/gearup_restore
 #!/bin/sh /etc/rc.common
@@ -774,16 +779,16 @@ stop() { return 0; }
 EOF
                 chmod +x /etc/init.d/gearup_restore
                 /etc/init.d/gearup_restore enable
-                echo -e "${GREEN}✅ Сервис восстановления создан.${NC}"
+                cecho "${GREEN}✅ Сервис восстановления создан.${NC}"
                 pause ;;
             4)
-                echo -e "${YELLOW}Выполняем все шаги GearUP...${NC}"
+                cecho "${YELLOW}Выполняем все шаги GearUP...${NC}"
                 make_backup
                 if ! pkg_is_installed kmod-tun; then
                     pkg_update && pkg_install kmod-tun
                 fi
                 if [ ! -e /dev/net/tun ]; then
-                    echo -e "${RED}❌ /dev/net/tun недоступен — GearUP не будет работать на этой прошивке/ядре.${NC}"
+                    cecho "${RED}❌ /dev/net/tun недоступен — GearUP не будет работать на этой прошивке/ядре.${NC}"
                     pause; continue
                 fi
                 if command -v curl >/dev/null 2>&1; then
@@ -792,12 +797,12 @@ EOF
                     wget -qO- sdp.gg/op | sh
                 fi
                 pause
-                echo -e "${GREEN}Шаг 2: используйте пункт 2 меню для монитора.${NC}"
+                cecho "${GREEN}Шаг 2: используйте пункт 2 меню для монитора.${NC}"
                 pause
-                echo -e "${YELLOW}Шаг 3: Убедитесь, что роутер привязан в приложении, затем используйте пункт 3.${NC}"
+                cecho "${YELLOW}Шаг 3: Убедитесь, что роутер привязан в приложении, затем используйте пункт 3.${NC}"
                 pause
                 ;;
-            *) echo -e "${RED}Неверный выбор.${NC}" ;;
+            *) cecho "${RED}Неверный выбор.${NC}" ;;
         esac
     done
 }
@@ -825,10 +830,10 @@ hw_accel_apply() {
 
 hw_accel_verify() {
     if dmesg 2>/dev/null | tail -n 50 | grep -qi "flow.*offload\|hnat"; then
-        echo -e "${GREEN}✅ Аппаратное ускорение включено, есть признаки активности в dmesg.${NC}"
+        cecho "${GREEN}✅ Аппаратное ускорение включено, есть признаки активности в dmesg.${NC}"
     else
-        echo -e "${YELLOW}⚠️  Опции применены, но явного подтверждения в dmesg не найдено.${NC}"
-        echo -e "${YELLOW}   Возможно ваш чипсет не поддерживает hardware offloading — тогда работает только software flow offloading (тоже полезно, но не так сильно разгружает CPU).${NC}"
+        cecho "${YELLOW}⚠️  Опции применены, но явного подтверждения в dmesg не найдено.${NC}"
+        cecho "${YELLOW}   Возможно ваш чипсет не поддерживает hardware offloading — тогда работает только software flow offloading (тоже полезно, но не так сильно разгружает CPU).${NC}"
     fi
 }
 
@@ -868,16 +873,16 @@ _hw_offer_fix() {
     [ -f /etc/init.d/zapret ] || return 0
     hw_offload_fix_applied && return 0
     hw_offload_fix_available || return 0
-    echo -e "${YELLOW}Обнаружен Zapret: offloading может ломать его работу (первые пакеты соединения уходят в offload мимо NFQUEUE).${NC}"
+    cecho "${YELLOW}Обнаружен Zapret: offloading может ломать его работу (первые пакеты соединения уходят в offload мимо NFQUEUE).${NC}"
     read -p "Применить FIX (offload только после 30 пакетов соединения)? (Y/n): " fixans
     case "$fixans" in
         n|N) return 0 ;;
     esac
     if hw_offload_fix_apply; then
-        echo -e "${GREEN}✅ FIX применён.${NC}"
+        cecho "${GREEN}✅ FIX применён.${NC}"
         log_msg "OK hw_offload_fix applied"
     else
-        echo -e "${RED}❌ Не удалось применить FIX (шаблон firewall4 не совпал).${NC}"
+        cecho "${RED}❌ Не удалось применить FIX (шаблон firewall4 не совпал).${NC}"
         log_msg "FAIL hw_offload_fix apply"
     fi
 }
@@ -885,7 +890,7 @@ _hw_offer_fix() {
 menu_hw_accel() {
     while true; do
         header
-        echo -e "${CYAN}=== Аппаратное ускорение (flow offloading) ===${NC}"
+        cecho "${CYAN}=== Аппаратное ускорение (flow offloading) ===${NC}"
         if [ "$(uci -q get firewall.@defaults[0].flow_offloading)" = "1" ]; then
             echo "Software offloading: ${GREEN}включён${NC}"
         else
@@ -912,7 +917,7 @@ menu_hw_accel() {
         [ "$(uci -q get firewall.@defaults[0].flow_offloading)" = "1" ] && FO_ON=1
         [ "$(uci -q get firewall.@defaults[0].flow_offloading_hw)" = "1" ] && FO_ON=1
         if [ "$FO_ON" = "1" ] && [ -f /etc/init.d/zapret ] && ! hw_offload_fix_applied; then
-            echo -e "${RED}⚠️  Включён offloading + Zapret без FIX — обход может работать некорректно. Примените FIX (пункт 4).${NC}"
+            cecho "${RED}⚠️  Включён offloading + Zapret без FIX — обход может работать некорректно. Примените FIX (пункт 4).${NC}"
         fi
         echo ""
         echo "1) Включить HW + SW offloading (максимальная разгрузка CPU)"
@@ -926,12 +931,12 @@ menu_hw_accel() {
             fi
         fi
         echo ""
-        echo -e "${YELLOW}Enter — Назад${NC}"
+        cecho "${YELLOW}Enter — Назад${NC}"
         choice=$(read_choice)
         case "$choice" in
             "") break ;;
             1)
-                echo -e "${YELLOW}Включаем hardware + software flow offloading...${NC}"
+                cecho "${YELLOW}Включаем hardware + software flow offloading...${NC}"
                 make_backup
                 hw_accel_apply 1 1
                 hw_accel_verify
@@ -939,36 +944,36 @@ menu_hw_accel() {
                 log_msg "hw_acceleration enabled (hw+sw)"
                 pause ;;
             2)
-                echo -e "${YELLOW}Включаем software flow offloading...${NC}"
+                cecho "${YELLOW}Включаем software flow offloading...${NC}"
                 make_backup
                 hw_accel_apply 1 0
-                echo -e "${GREEN}✅ Software offloading включён.${NC}"
+                cecho "${GREEN}✅ Software offloading включён.${NC}"
                 _hw_offer_fix
                 log_msg "hw_acceleration enabled (sw only)"
                 pause ;;
             3)
-                echo -e "${YELLOW}Выключаем flow offloading...${NC}"
+                cecho "${YELLOW}Выключаем flow offloading...${NC}"
                 make_backup
                 hw_accel_apply 0 0
-                echo -e "${GREEN}✅ Offloading выключен.${NC}"
+                cecho "${GREEN}✅ Offloading выключен.${NC}"
                 log_msg "hw_acceleration disabled"
                 pause ;;
             4)
                 if hw_offload_fix_applied; then
-                    echo -e "${YELLOW}Отключаем FIX...${NC}"
+                    cecho "${YELLOW}Отключаем FIX...${NC}"
                     hw_offload_fix_revert
-                    echo -e "${GREEN}✅ FIX отключён.${NC}"
+                    cecho "${GREEN}✅ FIX отключён.${NC}"
                     log_msg "hw_offload_fix reverted"
                 elif hw_offload_fix_apply; then
-                    echo -e "${GREEN}✅ FIX применён: первые ~30 пакетов соединения идут через CPU (DPI-обход работает), дальше — offload.${NC}"
-                    echo -e "${YELLOW}Обновление пакета firewall4 сбрасывает шаблон — примените FIX снова.${NC}"
+                    cecho "${GREEN}✅ FIX применён: первые ~30 пакетов соединения идут через CPU (DPI-обход работает), дальше — offload.${NC}"
+                    cecho "${YELLOW}Обновление пакета firewall4 сбрасывает шаблон — примените FIX снова.${NC}"
                     log_msg "OK hw_offload_fix applied"
                 else
-                    echo -e "${RED}❌ Не удалось применить FIX (шаблон firewall4 не совпал).${NC}"
+                    cecho "${RED}❌ Не удалось применить FIX (шаблон firewall4 не совпал).${NC}"
                     log_msg "FAIL hw_offload_fix apply"
                 fi
                 pause ;;
-            *) echo -e "${RED}Неверный выбор.${NC}" ;;
+            *) cecho "${RED}Неверный выбор.${NC}" ;;
         esac
     done
 }
@@ -976,16 +981,16 @@ menu_hw_accel() {
 # ====================== Wi-Fi ======================
 wifi_setup() {
     header
-    echo -e "${CYAN}Настройка Wi-Fi${NC}"
-    echo -e "${YELLOW}Один SSID будет установлен на оба диапазона (2.4 и 5 ГГц).${NC}"
+    cecho "${CYAN}Настройка Wi-Fi${NC}"
+    cecho "${YELLOW}Один SSID будет установлен на оба диапазона (2.4 и 5 ГГц).${NC}"
     read -p "Имя сети (SSID): " ssid
     if [ -z "$ssid" ]; then
-        echo -e "${RED}❌ SSID не может быть пустым.${NC}"; pause; return
+        cecho "${RED}❌ SSID не может быть пустым.${NC}"; pause; return
     fi
     read -p "Пароль (Enter — оставить сеть ОТКРЫТОЙ, без пароля): " wifi_pass
 
     if [ -n "$wifi_pass" ] && [ "${#wifi_pass}" -lt 8 ]; then
-        echo -e "${RED}❌ Пароль слишком короткий (WPA2 требует минимум 8 символов). Либо ≥8 символов, либо пусто для открытой сети.${NC}"
+        cecho "${RED}❌ Пароль слишком короткий (WPA2 требует минимум 8 символов). Либо ≥8 символов, либо пусто для открытой сети.${NC}"
         pause; return
     fi
 
@@ -1007,13 +1012,13 @@ wifi_setup() {
     done
     if uci commit wireless && wifi reload; then
         if [ -n "$wifi_pass" ]; then
-            echo -e "${GREEN}✅ Wi-Fi настроен: SSID \"$ssid\" (WPA2), страна PA.${NC}"
+            cecho "${GREEN}✅ Wi-Fi настроен: SSID \"$ssid\" (WPA2), страна PA.${NC}"
         else
-            echo -e "${YELLOW}⚠️  Wi-Fi настроен БЕЗ пароля (открытая сеть): SSID \"$ssid\", страна PA.${NC}"
+            cecho "${YELLOW}⚠️  Wi-Fi настроен БЕЗ пароля (открытая сеть): SSID \"$ssid\", страна PA.${NC}"
         fi
         log_msg "OK wifi_setup ssid=$ssid open=$( [ -z "$wifi_pass" ] && echo yes || echo no )"
     else
-        echo -e "${RED}❌ Не удалось применить настройки Wi-Fi.${NC}"
+        cecho "${RED}❌ Не удалось применить настройки Wi-Fi.${NC}"
         log_msg "FAIL wifi_setup"
     fi
     pause
@@ -1033,16 +1038,16 @@ _wifi_powersave_fix_apply() {
         applied=1
     done
     if [ "$applied" -eq 0 ]; then
-        echo -e "${RED}❌ Не найдено ни одного радиомодуля в wireless-конфиге.${NC}"
+        cecho "${RED}❌ Не найдено ни одного радиомодуля в wireless-конфиге.${NC}"
         log_msg "FAIL wifi_powersave_fix: no radios found"
         return 1
     fi
     if uci commit wireless && { wifi reload 2>/dev/null || wifi; }; then
-        echo -e "${GREEN}✅ Wi-Fi powersave отключён на всех радиомодулях.${NC}"
+        cecho "${GREEN}✅ Wi-Fi powersave отключён на всех радиомодулях.${NC}"
         log_msg "OK wifi_powersave_fix"
         return 0
     else
-        echo -e "${RED}❌ Не удалось применить настройки Wi-Fi.${NC}"
+        cecho "${RED}❌ Не удалось применить настройки Wi-Fi.${NC}"
         log_msg "FAIL wifi_powersave_fix: apply failed"
         return 1
     fi
@@ -1050,10 +1055,10 @@ _wifi_powersave_fix_apply() {
 
 wifi_powersave_fix() {
     header
-    echo -e "${CYAN}Отключение Wi-Fi powersave${NC}"
-    echo -e "${YELLOW}Лечит обрывы/просадки Wi-Fi при устойчивой нагрузке на роутер${NC}"
-    echo -e "${YELLOW}(например, активный NAS/USB-накопитель) — известная особенность${NC}"
-    echo -e "${YELLOW}RAX3000M и ряда похожих чипов.${NC}"
+    cecho "${CYAN}Отключение Wi-Fi powersave${NC}"
+    cecho "${YELLOW}Лечит обрывы/просадки Wi-Fi при устойчивой нагрузке на роутер${NC}"
+    cecho "${YELLOW}(например, активный NAS/USB-накопитель) — известная особенность${NC}"
+    cecho "${YELLOW}RAX3000M и ряда похожих чипов.${NC}"
     make_backup
     _wifi_powersave_fix_apply
     pause
@@ -1067,7 +1072,7 @@ wifi_powersave_fix() {
 # У каждого пользователя должен быть СВОЙ TMDB-ключ (бесплатный).
 
 _tmdb_key_instructions() {
-    echo -e "${CYAN}Как получить бесплатный TMDB API-ключ (у каждого — свой):${NC}"
+    cecho "${CYAN}Как получить бесплатный TMDB API-ключ (у каждого — свой):${NC}"
     echo "1. Зайдите на https://www.themoviedb.org и зарегистрируйтесь (или войдите)."
     echo "2. Перейдите в Settings -> API (в левом меню)."
     echo "3. Нажмите Create -> выберите Developer."
@@ -1075,8 +1080,8 @@ _tmdb_key_instructions() {
     echo "   (в названии приложения можно указать 'Home NAS', в URL — 'http://localhost')."
     echo "5. Скопируйте значение поля 'API Key (v3 auth)' — это и есть ваш ключ."
     echo ""
-    echo -e "${YELLOW}Ключ бесплатный. Не используйте один и тот же ключ на нескольких роутерах —${NC}"
-    echo -e "${YELLOW}у TMDB есть лимит запросов в секунду на ключ.${NC}"
+    cecho "${YELLOW}Ключ бесплатный. Не используйте один и тот же ключ на нескольких роутерах —${NC}"
+    cecho "${YELLOW}у TMDB есть лимит запросов в секунду на ключ.${NC}"
 }
 
 media_organizer_set_key() {
@@ -1085,25 +1090,25 @@ media_organizer_set_key() {
     current=""
     [ -f /etc/oum/tmdb_api_key ] && current=$(cat /etc/oum/tmdb_api_key)
     if [ -n "$current" ]; then
-        echo -e "${CYAN}Текущий сохранённый ключ: ${current}${NC}"
+        cecho "${CYAN}Текущий сохранённый ключ: ${current}${NC}"
     fi
     read -p "Вставьте ваш TMDB API-ключ (Enter — оставить как есть): " key
     if [ -z "$key" ]; then
         if [ -z "$current" ]; then
-            echo -e "${RED}❌ Ключ не задан. Без него сортировка будет работать, но без русских названий.${NC}"
+            cecho "${RED}❌ Ключ не задан. Без него сортировка будет работать, но без русских названий.${NC}"
         else
-            echo -e "${YELLOW}Ключ не изменён.${NC}"
+            cecho "${YELLOW}Ключ не изменён.${NC}"
         fi
         return
     fi
     if ! echo "$key" | grep -qE '^[a-f0-9]{32}$'; then
-        echo -e "${YELLOW}⚠️  Ключ не похож на стандартный TMDB v3 ключ (32 hex-символа), но сохраняю как есть.${NC}"
-        echo -e "${YELLOW}   Если TMDB не ответит — перепроверьте ключ через это же меню.${NC}"
+        cecho "${YELLOW}⚠️  Ключ не похож на стандартный TMDB v3 ключ (32 hex-символа), но сохраняю как есть.${NC}"
+        cecho "${YELLOW}   Если TMDB не ответит — перепроверьте ключ через это же меню.${NC}"
     fi
     mkdir -p /etc/oum
     echo "$key" > /etc/oum/tmdb_api_key
     chmod 600 /etc/oum/tmdb_api_key
-    echo -e "${GREEN}✅ Ключ сохранён в /etc/oum/tmdb_api_key.${NC}"
+    cecho "${GREEN}✅ Ключ сохранён в /etc/oum/tmdb_api_key.${NC}"
     log_msg "OK media_organizer_set_key"
 }
 
@@ -1421,20 +1426,20 @@ WATCHEOF
 
 media_organizer_install() {
     header
-    echo -e "${CYAN}=== Установка медиа-сортировщика (TV/Movies + TMDB) ===${NC}"
+    cecho "${CYAN}=== Установка медиа-сортировщика (TV/Movies + TMDB) ===${NC}"
     mkdir -p /etc/oum
 
     if ! command -v python3 >/dev/null 2>&1; then
-        echo -e "${YELLOW}Python3 не найден, устанавливаем...${NC}"
+        cecho "${YELLOW}Python3 не найден, устанавливаем...${NC}"
         pkg_update
         if ! pkg_install python3; then
-            echo -e "${RED}❌ Не удалось установить python3 — без него скрипт работать не будет.${NC}"
+            cecho "${RED}❌ Не удалось установить python3 — без него скрипт работать не будет.${NC}"
             log_msg "FAIL media_organizer_install: python3 install failed"
             pause; return
         fi
     fi
     if ! command -v python3 >/dev/null 2>&1; then
-        echo -e "${RED}❌ python3 всё ещё не найден после установки — прерываю.${NC}"
+        cecho "${RED}❌ python3 всё ещё не найден после установки — прерываю.${NC}"
         pause; return
     fi
 
@@ -1460,18 +1465,18 @@ CONFEOF
 
     echo ""
     if [ ! -s /etc/oum/tmdb_api_key ]; then
-        echo -e "${YELLOW}TMDB-ключ ещё не задан — без него сортировка будет работать,${NC}"
-        echo -e "${YELLOW}но БЕЗ русских названий (только очистка релизного мусора и раскладка по папкам).${NC}"
+        cecho "${YELLOW}TMDB-ключ ещё не задан — без него сортировка будет работать,${NC}"
+        cecho "${YELLOW}но БЕЗ русских названий (только очистка релизного мусора и раскладка по папкам).${NC}"
         echo ""
         media_organizer_set_key
     else
-        echo -e "${GREEN}TMDB-ключ уже задан.${NC}"
+        cecho "${GREEN}TMDB-ключ уже задан.${NC}"
         read -p "Изменить ключ? (y/N): " chg
         case "$chg" in y|Y) media_organizer_set_key ;; esac
     fi
 
     echo ""
-    echo -e "${YELLOW}Разворачиваем скрипты...${NC}"
+    cecho "${YELLOW}Разворачиваем скрипты...${NC}"
     _media_organizer_deploy_files
 
     read -p "Периодичность проверки cron, минут [5]: " interval
@@ -1483,14 +1488,14 @@ CONFEOF
     /etc/init.d/cron restart
 
     log_msg "OK media_organizer_install source=$SOURCE_DIR movies=$MOVIES_DIR tv=$TV_DIR interval=$interval"
-    echo -e "${GREEN}✅ Медиа-сортировщик установлен, проверка каждые $interval мин.${NC}"
-    echo -e "${YELLOW}Лог: /var/log/media-organizer.log${NC}"
+    cecho "${GREEN}✅ Медиа-сортировщик установлен, проверка каждые $interval мин.${NC}"
+    cecho "${YELLOW}Лог: /var/log/media-organizer.log${NC}"
     pause
 }
 
 media_organizer_uninstall() {
     header
-    echo -e "${YELLOW}Удалить медиа-сортировщик? Конфиг и TMDB-ключ тоже будут удалены. (y/N)${NC}"
+    cecho "${YELLOW}Удалить медиа-сортировщик? Конфиг и TMDB-ключ тоже будут удалены. (y/N)${NC}"
     read -p "Ответ: " ans
     case "$ans" in
         y|Y)
@@ -1499,9 +1504,9 @@ media_organizer_uninstall() {
             rm -f /usr/bin/media-organizer.py /usr/bin/media-organizer-watch.sh
             rm -f /etc/oum/media-organizer.conf /etc/oum/tmdb_api_key
             log_msg "OK media_organizer_uninstall"
-            echo -e "${GREEN}✅ Удалено.${NC}"
+            cecho "${GREEN}✅ Удалено.${NC}"
             ;;
-        *) echo -e "${YELLOW}Отменено.${NC}" ;;
+        *) cecho "${YELLOW}Отменено.${NC}" ;;
     esac
     pause
 }
@@ -1509,21 +1514,21 @@ media_organizer_uninstall() {
 menu_media_organizer() {
     while true; do
         header
-        echo -e "${CYAN}=== Медиа-сортировщик (TV/Movies + TMDB) ===${NC}"
+        cecho "${CYAN}=== Медиа-сортировщик (TV/Movies + TMDB) ===${NC}"
         if [ -f /usr/bin/media-organizer.py ]; then
-            echo -e "Статус: ${GREEN}установлен${NC}"
+            cecho "Статус: ${GREEN}установлен${NC}"
         else
-            echo -e "Статус: ${YELLOW}не установлен${NC}"
+            cecho "Статус: ${YELLOW}не установлен${NC}"
         fi
         if command -v python3 >/dev/null 2>&1; then
-            echo -e "Python3: ${GREEN}есть${NC}"
+            cecho "Python3: ${GREEN}есть${NC}"
         else
-            echo -e "Python3: ${RED}НЕ найден (сортировка работать не будет)${NC}"
+            cecho "Python3: ${RED}НЕ найден (сортировка работать не будет)${NC}"
         fi
         if [ -s /etc/oum/tmdb_api_key ]; then
-            echo -e "TMDB-ключ: ${GREEN}задан${NC}"
+            cecho "TMDB-ключ: ${GREEN}задан${NC}"
         else
-            echo -e "TMDB-ключ: ${YELLOW}не задан${NC}"
+            cecho "TMDB-ключ: ${YELLOW}не задан${NC}"
         fi
         echo ""
         echo "1) Установить / перенастроить (пути, ключ, cron)"
@@ -1532,7 +1537,7 @@ menu_media_organizer() {
         echo "4) Показать лог"
         echo "5) Удалить"
         echo ""
-        echo -e "${YELLOW}Enter — Назад${NC}"
+        cecho "${YELLOW}Enter — Назад${NC}"
         choice=$(read_choice)
         case "$choice" in
             "") break ;;
@@ -1541,7 +1546,7 @@ menu_media_organizer() {
             3)
                 header
                 if [ ! -f /usr/bin/media-organizer.py ]; then
-                    echo -e "${RED}❌ Сначала установите (пункт 1).${NC}"
+                    cecho "${RED}❌ Сначала установите (пункт 1).${NC}"
                 else
                     /usr/bin/media-organizer.py 2>&1 | tee -a /var/log/media-organizer.log
                 fi
@@ -1551,11 +1556,11 @@ menu_media_organizer() {
                 if [ -f /var/log/media-organizer.log ]; then
                     tail -n 40 /var/log/media-organizer.log
                 else
-                    echo -e "${YELLOW}Лог пуст или ещё не создан.${NC}"
+                    cecho "${YELLOW}Лог пуст или ещё не создан.${NC}"
                 fi
                 pause ;;
             5) media_organizer_uninstall ;;
-            *) echo -e "${RED}Неверный выбор.${NC}" ;;
+            *) cecho "${RED}Неверный выбор.${NC}" ;;
         esac
     done
 }
@@ -1565,7 +1570,7 @@ menu_media_organizer() {
 # слабое железо вроде RAX3000M). miniDLNA сознательно не используется.
 nas_setup() {
     header
-    echo -e "${CYAN}=== NAS / Медиасервер (SMB + aria2 + AriaNg) ===${NC}"
+    cecho "${CYAN}=== NAS / Медиасервер (SMB + aria2 + AriaNg) ===${NC}"
 
     read -p "Раздел диска [/dev/sda1]: " NAS_DISK_DEV
     NAS_DISK_DEV=${NAS_DISK_DEV:-/dev/sda1}
@@ -1574,7 +1579,7 @@ nas_setup() {
     read -p "Точка монтирования [/mnt/hdd]: " NAS_MOUNT
     NAS_MOUNT=${NAS_MOUNT:-/mnt/hdd}
 
-    echo -e "${YELLOW}Форматировать $NAS_DISK_BASE в ext4? ВСЕ ДАННЫЕ БУДУТ УДАЛЕНЫ! (y/N)${NC}"
+    cecho "${YELLOW}Форматировать $NAS_DISK_BASE в ext4? ВСЕ ДАННЫЕ БУДУТ УДАЛЕНЫ! (y/N)${NC}"
     read -p "Ответ: " fmt_ans
     case "$fmt_ans" in
         y|Y|yes|YES) NAS_FORMAT="yes" ;;
@@ -1589,7 +1594,7 @@ nas_setup() {
 
     make_backup
 
-    echo -e "${YELLOW}Устанавливаем пакеты (USB, ФС, SMB, aria2)...${NC}"
+    cecho "${YELLOW}Устанавливаем пакеты (USB, ФС, SMB, aria2)...${NC}"
     pkg_update
     pkg_install kmod-usb-core kmod-usb2 kmod-usb3 kmod-usb-storage kmod-usb-storage-uas \
                  kmod-fs-ext4 kmod-scsi-core block-mount e2fsprogs fdisk lsblk \
@@ -1597,7 +1602,7 @@ nas_setup() {
                  luci-app-ksmbd aria2 luci-app-aria2
 
     if [ "$NAS_FORMAT" = "yes" ]; then
-        echo -e "${YELLOW}Форматируем $NAS_DISK_BASE...${NC}"
+        cecho "${YELLOW}Форматируем $NAS_DISK_BASE...${NC}"
         umount "${NAS_DISK_BASE}"* 2>/dev/null || true
         swapoff -a 2>/dev/null || true
         wipefs -a "$NAS_DISK_BASE" 2>/dev/null || dd if=/dev/zero of="$NAS_DISK_BASE" bs=1M count=10 >/dev/null 2>&1
@@ -1609,16 +1614,16 @@ FDISK_EOF
         sleep 2
         partprobe "$NAS_DISK_BASE" 2>/dev/null || true
         sleep 1
-        echo -e "${YELLOW}Создаём ext4 на $NAS_DISK_DEV...${NC}"
+        cecho "${YELLOW}Создаём ext4 на $NAS_DISK_DEV...${NC}"
         mkfs.ext4 -F -L NAS "$NAS_DISK_DEV"
     else
-        echo -e "${CYAN}Форматирование пропущено (используем существующую ФС).${NC}"
+        cecho "${CYAN}Форматирование пропущено (используем существующую ФС).${NC}"
         if ! blkid "$NAS_DISK_DEV" 2>/dev/null | grep -q ext4; then
-            echo -e "${RED}⚠️  На $NAS_DISK_DEV не обнаружена ext4-разметка. Если диск новый — перезапустите с форматированием.${NC}"
+            cecho "${RED}⚠️  На $NAS_DISK_DEV не обнаружена ext4-разметка. Если диск новый — перезапустите с форматированием.${NC}"
         fi
     fi
 
-    echo -e "${YELLOW}Монтируем $NAS_DISK_DEV в $NAS_MOUNT и прописываем fstab...${NC}"
+    cecho "${YELLOW}Монтируем $NAS_DISK_DEV в $NAS_MOUNT и прописываем fstab...${NC}"
     mkdir -p "$NAS_MOUNT"
     block detect > /etc/config/fstab
     while uci -q delete fstab.@mount[0]; do :; done
@@ -1633,32 +1638,32 @@ FDISK_EOF
     mount "$NAS_DISK_DEV" "$NAS_MOUNT" 2>/dev/null || true
 
     if ! df "$NAS_MOUNT" | grep -q "$NAS_DISK_DEV"; then
-        echo -e "${RED}❌ Диск $NAS_DISK_DEV не смонтировался в $NAS_MOUNT! Прерываю установку NAS.${NC}"
+        cecho "${RED}❌ Диск $NAS_DISK_DEV не смонтировался в $NAS_MOUNT! Прерываю установку NAS.${NC}"
         log_msg "FAIL nas_setup mount $NAS_DISK_DEV -> $NAS_MOUNT"
         pause; return
     fi
 
-    echo -e "${YELLOW}Проверяем/создаём структуру папок...${NC}"
+    cecho "${YELLOW}Проверяем/создаём структуру папок...${NC}"
     for d in "$NAS_MOUNT/NAS/downloads" "$NAS_MOUNT/NAS/tv" "$NAS_MOUNT/NAS/movies"; do
         if [ -d "$d" ]; then
-            echo -e "  ${GREEN}OK${NC}: $d"
+            cecho "  ${GREEN}OK${NC}: $d"
         else
-            echo -e "  ${YELLOW}создаём${NC}: $d"
+            cecho "  ${YELLOW}создаём${NC}: $d"
             mkdir -p "$d"
         fi
     done
     chmod -R 777 "$NAS_MOUNT/NAS"
 
-    echo -e "${YELLOW}Настраиваем swap-файл...${NC}"
+    cecho "${YELLOW}Настраиваем swap-файл...${NC}"
     SWAP_FILE="$NAS_MOUNT/swapfile"
     NEW_SWAP="no"
     if [ "$NAS_FORMAT" = "yes" ] || [ ! -f "$SWAP_FILE" ]; then
-        echo -e "  Создаём новый 2GB swap-файл..."
+        cecho "  Создаём новый 2GB swap-файл..."
         dd if=/dev/zero of="$SWAP_FILE" bs=1M count=2048
         chmod 600 "$SWAP_FILE"
         NEW_SWAP="yes"
     else
-        echo -e "  Найден существующий swap-файл, переиспользуем: $SWAP_FILE"
+        cecho "  Найден существующий swap-файл, переиспользуем: $SWAP_FILE"
     fi
     losetup -f "$SWAP_FILE" 2>/dev/null || true
     LOOP_DEV="$(losetup -j "$SWAP_FILE" | cut -d: -f1)"
@@ -1677,7 +1682,7 @@ RCEOF
         fi
     fi
 
-    echo -e "${YELLOW}Настраиваем aria2 + AriaNg...${NC}"
+    cecho "${YELLOW}Настраиваем aria2 + AriaNg...${NC}"
     SECT="$(uci show aria2 2>/dev/null | grep '=aria2' | head -1 | cut -d. -f2 | cut -d= -f1)"
     [ -z "$SECT" ] && SECT="main"
     uci set aria2.${SECT}=aria2
@@ -1697,14 +1702,14 @@ RCEOF
         if fetch_file "https://github.com/mayswind/AriaNg/releases/download/1.3.7/AriaNg-1.3.7-AllInOne.zip" ariang.zip && [ -s ariang.zip ]; then
             unzip -o ariang.zip -d /www/ariang/
         else
-            echo -e "${RED}❌ Не удалось скачать AriaNg.${NC}"
+            cecho "${RED}❌ Не удалось скачать AriaNg.${NC}"
             log_msg "FAIL nas_setup ariang download"
         fi
         rm -f ariang.zip
         cd - >/dev/null
     fi
 
-    echo -e "${YELLOW}Настраиваем Samba (ksmbd)...${NC}"
+    cecho "${YELLOW}Настраиваем Samba (ksmbd)...${NC}"
     uci set ksmbd.@globals[0].description='OpenWrt-NAS'
     uci set ksmbd.@globals[0].workgroup='WORKGROUP'
     while uci -q delete ksmbd.@share[0]; do :; done
@@ -1721,7 +1726,7 @@ RCEOF
     /etc/init.d/ksmbd enable
     /etc/init.d/ksmbd restart
 
-    echo -e "${YELLOW}Настраиваем firewall (aria2-RPC, SMB)...${NC}"
+    cecho "${YELLOW}Настраиваем firewall (aria2-RPC, SMB)...${NC}"
     _nas_add_fw_rule() {
         NAME="$1"; PORT="$2"; PROTO="$3"
         while uci -q show firewall | grep -q "\.name='$NAME'"; do
@@ -1740,12 +1745,12 @@ RCEOF
     uci commit firewall
     /etc/init.d/firewall restart
 
-    echo -e "${YELLOW}Отключаем Wi-Fi powersave (лечит отвалы Wi-Fi при активной нагрузке на USB/NAS)...${NC}"
+    cecho "${YELLOW}Отключаем Wi-Fi powersave (лечит отвалы Wi-Fi при активной нагрузке на USB/NAS)...${NC}"
     _wifi_powersave_fix_apply
 
     log_msg "OK nas_setup disk=$NAS_DISK_DEV mount=$NAS_MOUNT format=$NAS_FORMAT"
     echo ""
-    echo -e "${GREEN}✅ NAS настроен!${NC}"
+    cecho "${GREEN}✅ NAS настроен!${NC}"
     echo "Точка монтирования: $NAS_MOUNT"
     echo "SMB Шара:           \\\\<IP_роутера>\\NAS"
     echo "AriaNg Web UI:       http://<IP_роутера>/ariang"
@@ -1765,7 +1770,7 @@ quic_block_enabled() {
 
 quic_block_toggle() {
     if quic_block_enabled; then
-        echo -e "${YELLOW}Отключаем блокировку QUIC...${NC}"
+        cecho "${YELLOW}Отключаем блокировку QUIC...${NC}"
         for RULE in Block_UDP_80 Block_UDP_443; do
             while true; do
                 IDX=$(uci show firewall 2>/dev/null | grep "name='$RULE'" | cut -d. -f2 | cut -d= -f1 | head -n1)
@@ -1775,10 +1780,10 @@ quic_block_toggle() {
         done
         uci commit firewall
         /etc/init.d/firewall restart
-        echo -e "${GREEN}✅ Блокировка QUIC отключлена.${NC}"
+        cecho "${GREEN}✅ Блокировка QUIC отключлена.${NC}"
         log_msg "quic block disabled"
     else
-        echo -e "${YELLOW}Включаем блокировку QUIC (REJECT UDP 80/443, lan -> wan)...${NC}"
+        cecho "${YELLOW}Включаем блокировку QUIC (REJECT UDP 80/443, lan -> wan)...${NC}"
         uci add firewall rule >/dev/null
         uci set firewall.@rule[-1].name='Block_UDP_80'
         uci add_list firewall.@rule[-1].proto='udp'
@@ -1795,8 +1800,8 @@ quic_block_toggle() {
         uci set firewall.@rule[-1].target='REJECT'
         uci commit firewall
         /etc/init.d/firewall restart
-        echo -e "${GREEN}✅ Блокировка QUIC включена: браузеры откатятся на TCP (HTTP/2), который обрабатывается Zapret.${NC}"
-        echo -e "${YELLOW}Если используете Discord (голос) или игры — при проблемах отключите и проверьте без неё.${NC}"
+        cecho "${GREEN}✅ Блокировка QUIC включена: браузеры откатятся на TCP (HTTP/2), который обрабатывается Zapret.${NC}"
+        cecho "${YELLOW}Если используете Discord (голос) или игры — при проблемах отключите и проверьте без неё.${NC}"
         log_msg "quic block enabled"
     fi
 }
@@ -1834,14 +1839,14 @@ dashboard() {
     else
         DASH="$DASH${RED}○${NC}"
     fi
-    echo -e "$DASH"
+    cecho "$DASH"
 }
 
 # ====================== Интернет и обход блокировок ======================
 menu_internet() {
     while true; do
         header
-        echo -e "${CYAN}=== Интернет и обход блокировок ===${NC}"
+        cecho "${CYAN}=== Интернет и обход блокировок ===${NC}"
         echo "1) Установка компонентов (база, Podkop, Zapret, AmneziaWG, всё сразу)"
         echo "2) Podkop: watchdog и каскад восстановления"
         echo "3) GearUP Booster: установка и настройка"
@@ -1850,9 +1855,9 @@ menu_internet() {
         else
             echo "4) Блокировка QUIC (UDP 80/443): ${YELLOW}выключена${NC} — включить"
         fi
-        echo -e "   ${CYAN}(рекомендуется при использовании Zapret: YouTube уходит с QUIC на TCP)${NC}"
+        cecho "   ${CYAN}(рекомендуется при использовании Zapret: YouTube уходит с QUIC на TCP)${NC}"
         echo ""
-        echo -e "${YELLOW}Enter — Назад${NC}"
+        cecho "${YELLOW}Enter — Назад${NC}"
         choice=$(read_choice)
         case "$choice" in
             "") break ;;
@@ -1860,7 +1865,7 @@ menu_internet() {
             2) menu_resilience ;;
             3) menu_gearup ;;
             4) make_backup; quic_block_toggle; pause ;;
-            *) echo -e "${RED}Неверный выбор.${NC}" ;;
+            *) cecho "${RED}Неверный выбор.${NC}" ;;
         esac
     done
 }
@@ -1869,7 +1874,7 @@ menu_internet() {
 menu_network() {
     while true; do
         header
-        echo -e "${CYAN}=== Сеть и Wi-Fi ===${NC}"
+        cecho "${CYAN}=== Сеть и Wi-Fi ===${NC}"
         echo "1) Настройка Wi-Fi (SSID/пароль, открытая сеть, PA)"
         echo "2) Отключить IPv6"
         echo "3) Отключить Wi-Fi powersave (лечит обрывы под нагрузкой)"
@@ -1879,29 +1884,29 @@ menu_network() {
             echo "4) GitHub hosts-fix: ${YELLOW}не применён${NC} — применить (если GitHub недоступен)"
         fi
         echo ""
-        echo -e "${YELLOW}Enter — Назад${NC}"
+        cecho "${YELLOW}Enter — Назад${NC}"
         choice=$(read_choice)
         case "$choice" in
             "") break ;;
             1) wifi_setup ;;
-            2) make_backup; uci set network.wan6.disabled='1'; uci commit; /etc/init.d/network restart; echo -e "${GREEN}✅ IPv6 отключён.${NC}"; pause ;;
+            2) make_backup; uci set network.wan6.disabled='1'; uci commit; /etc/init.d/network restart; cecho "${GREEN}✅ IPv6 отключён.${NC}"; pause ;;
             3) wifi_powersave_fix ;;
             4)
                 if github_hosts_fix_applied; then
-                    echo -e "${YELLOW}Снимаем hosts-fix для GitHub...${NC}"
+                    cecho "${YELLOW}Снимаем hosts-fix для GitHub...${NC}"
                     github_hosts_fix_revert
-                    echo -e "${GREEN}✅ hosts-fix снят.${NC}"
+                    cecho "${GREEN}✅ hosts-fix снят.${NC}"
                 else
-                    echo -e "${YELLOW}Применяем hosts-fix для GitHub (IP GitHub в /etc/hosts)...${NC}"
+                    cecho "${YELLOW}Применяем hosts-fix для GitHub (IP GitHub в /etc/hosts)...${NC}"
                     if github_hosts_fix_apply; then
-                        echo -e "${GREEN}✅ hosts-fix применён.${NC}"
+                        cecho "${GREEN}✅ hosts-fix применён.${NC}"
                         log_msg "github hosts-fix applied manually"
                     else
-                        echo -e "${RED}❌ Не удалось применить hosts-fix.${NC}"
+                        cecho "${RED}❌ Не удалось применить hosts-fix.${NC}"
                     fi
                 fi
                 pause ;;
-            *) echo -e "${RED}Неверный выбор.${NC}" ;;
+            *) cecho "${RED}Неверный выбор.${NC}" ;;
         esac
     done
 }
@@ -1910,7 +1915,7 @@ menu_network() {
 menu_resilience() {
     while true; do
         header
-        echo -e "${CYAN}=== Podkop: отказоустойчивость ===${NC}"
+        cecho "${CYAN}=== Podkop: отказоустойчивость ===${NC}"
         if crontab -l 2>/dev/null | grep -q podkop-watchdog.sh; then
             echo "Watchdog: ${GREEN}установлен${NC}"
         else
@@ -1920,8 +1925,8 @@ menu_resilience() {
             echo "Неудачных проверок подряд: $(cat /tmp/podkop_watchdog/fail_count)"
         fi
         if [ -f /tmp/podkop_watchdog/stopped ]; then
-            echo -e "${RED}Podkop остановлен watchdog'ом — интернет без прокси.${NC}"
-            echo -e "${RED}Вернуть: пункт 6 (сброс) или перезагрузка роутера.${NC}"
+            cecho "${RED}Podkop остановлен watchdog'ом — интернет без прокси.${NC}"
+            cecho "${RED}Вернуть: пункт 6 (сброс) или перезагрузка роутера.${NC}"
         fi
         echo ""
         echo "1) Watchdog: установить / обновить до v2 (по крону)"
@@ -1931,7 +1936,7 @@ menu_resilience() {
         echo "5) Каскад восстановления вручную (рестарт / обновление / пауза)"
         echo "6) Сброс: запустить podkop после остановки (сброс флагов watchdog)"
         echo ""
-        echo -e "${YELLOW}Enter — Назад${NC}"
+        cecho "${YELLOW}Enter — Назад${NC}"
         choice=$(read_choice)
         case "$choice" in
             "") break ;;
@@ -1941,7 +1946,7 @@ menu_resilience() {
             4) watchdog_test ;;
             5) podkop_recover ;;
             6) watchdog_resume ;;
-            *) echo -e "${RED}Неверный выбор.${NC}" ;;
+            *) cecho "${RED}Неверный выбор.${NC}" ;;
         esac
     done
 }
@@ -1950,7 +1955,7 @@ menu_resilience() {
 menu_nas_media() {
     while true; do
         header
-        echo -e "${CYAN}=== NAS и медиа ===${NC}"
+        cecho "${CYAN}=== NAS и медиа ===${NC}"
         if /etc/init.d/ksmbd status >/dev/null 2>&1; then
             echo "NAS (SMB): ${GREEN}активен${NC}"
         else
@@ -1965,13 +1970,13 @@ menu_nas_media() {
         echo "1) NAS / Медиасервер (SMB + aria2 + AriaNg) — установка/перенастройка"
         echo "2) Медиа-сортировщик (TV/Movies + TMDB) — установка, ключ, запуск, лог"
         echo ""
-        echo -e "${YELLOW}Enter — Назад${NC}"
+        cecho "${YELLOW}Enter — Назад${NC}"
         choice=$(read_choice)
         case "$choice" in
             "") break ;;
             1) nas_setup ;;
             2) menu_media_organizer ;;
-            *) echo -e "${RED}Неверный выбор.${NC}" ;;
+            *) cecho "${RED}Неверный выбор.${NC}" ;;
         esac
     done
 }
@@ -1980,19 +1985,19 @@ menu_nas_media() {
 menu_system() {
     while true; do
         header
-        echo -e "${CYAN}=== Система ===${NC}"
+        cecho "${CYAN}=== Система ===${NC}"
         echo "Роутер: $(detect_router_model)"
         echo ""
         echo "1) Драйверы и USB / файловые системы"
         echo "2) Темы LuCI"
         echo ""
-        echo -e "${YELLOW}Enter — Назад${NC}"
+        cecho "${YELLOW}Enter — Назад${NC}"
         choice=$(read_choice)
         case "$choice" in
             "") break ;;
             1) menu_drivers ;;
             2) menu_themes ;;
-            *) echo -e "${RED}Неверный выбор.${NC}" ;;
+            *) cecho "${RED}Неверный выбор.${NC}" ;;
         esac
     done
 }
@@ -2001,7 +2006,7 @@ menu_system() {
 menu_maintenance() {
     while true; do
         header
-        echo -e "${CYAN}=== Диагностика и обслуживание ===${NC}"
+        cecho "${CYAN}=== Диагностика и обслуживание ===${NC}"
         echo "1) Диагностика: почему не работает"
         echo "2) Быстрый статус системы"
         echo "3) Создать бэкап конфигурации сейчас"
@@ -2011,7 +2016,7 @@ menu_maintenance() {
         echo "7) Перезапустить firewall"
         echo "8) Перезагрузить роутер"
         echo ""
-        echo -e "${YELLOW}Enter — Назад${NC}"
+        cecho "${YELLOW}Enter — Назад${NC}"
         choice=$(read_choice)
         case "$choice" in
             "") break ;;
@@ -2021,9 +2026,9 @@ menu_maintenance() {
             4) menu_restore ;;
             5) oum_self_update ;;
             6) menu_uninstall ;;
-            7) /etc/init.d/firewall restart; echo -e "${GREEN}✅ Firewall перезапущен.${NC}"; pause ;;
+            7) /etc/init.d/firewall restart; cecho "${GREEN}✅ Firewall перезапущен.${NC}"; pause ;;
             8) echo "Перезагрузка..."; sleep 3; reboot ;;
-            *) echo -e "${RED}Неверный выбор.${NC}" ;;
+            *) cecho "${RED}Неверный выбор.${NC}" ;;
         esac
     done
 }
@@ -2049,16 +2054,16 @@ drivers_install() {
             OK=$((OK + 1))
         else
             FAIL=$((FAIL + 1))
-            echo -e "${YELLOW}  ⚠️  $p не установлен (может отсутствовать для этой ветки OpenWrt)${NC}"
+            cecho "${YELLOW}  ⚠️  $p не установлен (может отсутствовать для этой ветки OpenWrt)${NC}"
         fi
     done
     if [ "$FAIL" -eq 0 ]; then
-        echo -e "${GREEN}✅ Установлено пакетов: $OK.${NC}"
+        cecho "${GREEN}✅ Установлено пакетов: $OK.${NC}"
     else
-        echo -e "${GREEN}✅ Установлено: $OK, не удалось: $FAIL.${NC}"
-        echo -e "${YELLOW}   Для NTFS на старых ветках OpenWrt (21/22) используйте пакет ntfs-3g вместо kmod-fs-ntfs3.${NC}"
+        cecho "${GREEN}✅ Установлено: $OK, не удалось: $FAIL.${NC}"
+        cecho "${YELLOW}   Для NTFS на старых ветках OpenWrt (21/22) используйте пакет ntfs-3g вместо kmod-fs-ntfs3.${NC}"
     fi
-    echo -e "${YELLOW}⚠️  После перепрошивки (sysupgrade) kmod-пакеты нужно ставить заново — версия ядра меняется.${NC}"
+    cecho "${YELLOW}⚠️  После перепрошивки (sysupgrade) kmod-пакеты нужно ставить заново — версия ядра меняется.${NC}"
     log_msg "OK drivers_install ok=$OK fail=$FAIL"
 }
 
@@ -2066,7 +2071,7 @@ menu_drivers() {
     while true; do
         header
         MODEL=$(detect_router_model)
-        echo -e "${CYAN}=== Драйверы и USB / файловые системы ===${NC}"
+        cecho "${CYAN}=== Драйверы и USB / файловые системы ===${NC}"
         echo "Роутер: $MODEL"
         case "$MODEL" in
             *AX6S*|*AX3200*)
@@ -2090,44 +2095,44 @@ menu_drivers() {
         echo "3) Кодировки NLS — русские имена файлов на FAT/NTFS-дисках"
         echo "4) kmod-tun отдельно (GearUP, VPN)"
         echo ""
-        echo -e "${YELLOW}Enter — Назад${NC}"
+        cecho "${YELLOW}Enter — Назад${NC}"
         choice=$(read_choice)
         case "$choice" in
             "") break ;;
-            1) echo -e "${YELLOW}Устанавливаем полный набор...${NC}"; drivers_install "$DRV_FULL"; pause ;;
-            2) echo -e "${YELLOW}Устанавливаем USB + ФС...${NC}"; drivers_install "$DRV_USBFS"; pause ;;
-            3) echo -e "${YELLOW}Устанавливаем кодировки...${NC}"; drivers_install "$DRV_NLS"; pause ;;
+            1) cecho "${YELLOW}Устанавливаем полный набор...${NC}"; drivers_install "$DRV_FULL"; pause ;;
+            2) cecho "${YELLOW}Устанавливаем USB + ФС...${NC}"; drivers_install "$DRV_USBFS"; pause ;;
+            3) cecho "${YELLOW}Устанавливаем кодировки...${NC}"; drivers_install "$DRV_NLS"; pause ;;
             4) drivers_install "kmod-tun"; pause ;;
-            *) echo -e "${RED}Неверный выбор.${NC}" ;;
+            *) cecho "${RED}Неверный выбор.${NC}" ;;
         esac
     done
 }
 
 # ====================== Темы LuCI ======================
 install_argon() {
-    echo -e "${YELLOW}Определяем свежую версию Argon (GitHub API)...${NC}"
+    cecho "${YELLOW}Определяем свежую версию Argon (GitHub API)...${NC}"
     URL=""
     if command -v curl >/dev/null 2>&1; then
         URL=$(curl -fsSL "https://api.github.com/repos/jerrykuku/luci-theme-argon/releases/latest" 2>/dev/null \
               | grep -o 'https://[^"]*luci-theme-argon[^"]*\.ipk' | head -n1)
     fi
     if [ -z "$URL" ]; then
-        echo -e "${RED}❌ Не удалось получить ссылку на Argon (GitHub API недоступен?).${NC}"
+        cecho "${RED}❌ Не удалось получить ссылку на Argon (GitHub API недоступен?).${NC}"
         log_msg "FAIL argon: no release url"
         return 1
     fi
-    echo -e "${YELLOW}Скачиваем: $URL${NC}"
+    cecho "${YELLOW}Скачиваем: $URL${NC}"
     if fetch_file "$URL" /tmp/luci-theme-argon.ipk && [ -s /tmp/luci-theme-argon.ipk ]; then
         if pkg_install_local /tmp/luci-theme-argon.ipk; then
-            echo -e "${GREEN}✅ Argon установлен. Сделайте его темой по умолчанию (пункт 4).${NC}"
+            cecho "${GREEN}✅ Argon установлен. Сделайте его темой по умолчанию (пункт 4).${NC}"
             log_msg "OK install argon"
         else
-            echo -e "${RED}❌ Не удалось установить Argon.${NC}"
+            cecho "${RED}❌ Не удалось установить Argon.${NC}"
             log_msg "FAIL install argon"
         fi
         rm -f /tmp/luci-theme-argon.ipk
     else
-        echo -e "${RED}❌ Не удалось скачать Argon.${NC}"
+        cecho "${RED}❌ Не удалось скачать Argon.${NC}"
         log_msg "FAIL download argon"
     fi
 }
@@ -2137,12 +2142,12 @@ theme_set_default() {
     ls -1 /www/luci-static 2>/dev/null
     read -p "Имя темы (например argon, material, bootstrap): " t
     if [ ! -d "/www/luci-static/$t" ]; then
-        echo -e "${RED}❌ Тема $t не найдена в /www/luci-static.${NC}"
+        cecho "${RED}❌ Тема $t не найдена в /www/luci-static.${NC}"
         return
     fi
     uci set luci.main.mediaurlbase="/luci-static/$t"
     uci commit luci
-    echo -e "${GREEN}✅ Тема по умолчанию: $t (перезагрузите страницу LuCI).${NC}"
+    cecho "${GREEN}✅ Тема по умолчанию: $t (перезагрузите страницу LuCI).${NC}"
     log_msg "OK theme default=$t"
 }
 
@@ -2152,11 +2157,11 @@ theme_remove() {
     read -p "Какую тему удалить: " t
     [ -z "$t" ] && return
     if [ "$t" = "bootstrap" ]; then
-        echo -e "${RED}❌ bootstrap — системная тема, удалить нельзя.${NC}"
+        cecho "${RED}❌ bootstrap — системная тема, удалить нельзя.${NC}"
         return
     fi
     if [ ! -d "/www/luci-static/$t" ]; then
-        echo -e "${RED}❌ Тема $t не найдена.${NC}"
+        cecho "${RED}❌ Тема $t не найдена.${NC}"
         return
     fi
     pkg_remove "luci-theme-$t" >/dev/null 2>&1
@@ -2164,16 +2169,16 @@ theme_remove() {
     if [ "$(uci -q get luci.main.mediaurlbase)" = "/luci-static/$t" ]; then
         uci set luci.main.mediaurlbase='/luci-static/bootstrap'
         uci commit luci
-        echo -e "${YELLOW}Тема по умолчанию сброшена на bootstrap.${NC}"
+        cecho "${YELLOW}Тема по умолчанию сброшена на bootstrap.${NC}"
     fi
-    echo -e "${GREEN}✅ Тема $t удалена.${NC}"
+    cecho "${GREEN}✅ Тема $t удалена.${NC}"
     log_msg "OK theme removed=$t"
 }
 
 menu_themes() {
     while true; do
         header
-        echo -e "${CYAN}=== Темы LuCI ===${NC}"
+        cecho "${CYAN}=== Темы LuCI ===${NC}"
         CUR=$(uci -q get luci.main.mediaurlbase)
         echo "Текущая тема: ${CUR#/luci-static/}"
         echo "Установленные: $(ls -1 /www/luci-static 2>/dev/null | tr '\n' ' ')"
@@ -2184,7 +2189,7 @@ menu_themes() {
         echo "4) Сделать тему по умолчанию"
         echo "5) Удалить тему"
         echo ""
-        echo -e "${YELLOW}Enter — Назад${NC}"
+        cecho "${YELLOW}Enter — Назад${NC}"
         choice=$(read_choice)
         case "$choice" in
             "") break ;;
@@ -2197,7 +2202,7 @@ menu_themes() {
                pause ;;
             4) theme_set_default; pause ;;
             5) theme_remove; pause ;;
-            *) echo -e "${RED}Неверный выбор.${NC}" ;;
+            *) cecho "${RED}Неверный выбор.${NC}" ;;
         esac
     done
 }
@@ -2205,27 +2210,27 @@ menu_themes() {
 # ====================== Удаление компонентов ======================
 uninstall_podkop() {
     header
-    [ -f /etc/init.d/podkop ] || { echo -e "${RED}Podkop не найден.${NC}"; pause; return; }
-    echo -e "${RED}Удалить Podkop? (y/N)${NC}"
+    [ -f /etc/init.d/podkop ] || { cecho "${RED}Podkop не найден.${NC}"; pause; return; }
+    cecho "${RED}Удалить Podkop? (y/N)${NC}"
     read -p "Ответ: " a
-    case "$a" in y|Y) ;; *) echo -e "${YELLOW}Отменено.${NC}"; pause; return ;; esac
+    case "$a" in y|Y) ;; *) cecho "${YELLOW}Отменено.${NC}"; pause; return ;; esac
     make_backup
     /etc/init.d/podkop stop 2>/dev/null
     /etc/init.d/podkop disable 2>/dev/null
     rm -f /etc/init.d/podkop /usr/bin/podkop
     rm -rf /etc/podkop 2>/dev/null
     log_msg "OK podkop uninstalled"
-    echo -e "${GREEN}✅ Podkop удалён (sing-box оставлен — может использоваться другим ПО).${NC}"
-    echo -e "${YELLOW}Для полной очистки nftables-правил перезагрузите роутер.${NC}"
+    cecho "${GREEN}✅ Podkop удалён (sing-box оставлен — может использоваться другим ПО).${NC}"
+    cecho "${YELLOW}Для полной очистки nftables-правил перезагрузите роутер.${NC}"
     pause
 }
 
 uninstall_zapret() {
     header
-    [ -f /etc/init.d/zapret ] || { echo -e "${RED}Zapret не найден.${NC}"; pause; return; }
-    echo -e "${RED}Удалить Zapret (+ Zapret-Manager)? (y/N)${NC}"
+    [ -f /etc/init.d/zapret ] || { cecho "${RED}Zapret не найден.${NC}"; pause; return; }
+    cecho "${RED}Удалить Zapret (+ Zapret-Manager)? (y/N)${NC}"
     read -p "Ответ: " a
-    case "$a" in y|Y) ;; *) echo -e "${YELLOW}Отменено.${NC}"; pause; return ;; esac
+    case "$a" in y|Y) ;; *) cecho "${YELLOW}Отменено.${NC}"; pause; return ;; esac
     make_backup
     /etc/init.d/zapret stop 2>/dev/null
     /etc/init.d/zapret disable 2>/dev/null
@@ -2236,19 +2241,19 @@ uninstall_zapret() {
     /etc/init.d/cron restart 2>/dev/null
     /etc/init.d/firewall restart 2>/dev/null
     log_msg "OK zapret uninstalled"
-    echo -e "${GREEN}✅ Zapret удалён.${NC}"
-    echo -e "${YELLOW}Блокировка QUIC и FIX offloading (если включали) оставлены — отключаются в меню 2 и 3.${NC}"
+    cecho "${GREEN}✅ Zapret удалён.${NC}"
+    cecho "${YELLOW}Блокировка QUIC и FIX offloading (если включали) оставлены — отключаются в меню 2 и 3.${NC}"
     pause
 }
 
 uninstall_gearup() {
     header
     if ! pgrep -f guplugin >/dev/null 2>&1 && [ ! -f /etc/init.d/gearup-monitor ]; then
-        echo -e "${RED}GearUP не найден.${NC}"; pause; return
+        cecho "${RED}GearUP не найден.${NC}"; pause; return
     fi
-    echo -e "${RED}Удалить GearUP (плагин + монитор + сервис восстановления)? (y/N)${NC}"
+    cecho "${RED}Удалить GearUP (плагин + монитор + сервис восстановления)? (y/N)${NC}"
     read -p "Ответ: " a
-    case "$a" in y|Y) ;; *) echo -e "${YELLOW}Отменено.${NC}"; pause; return ;; esac
+    case "$a" in y|Y) ;; *) cecho "${YELLOW}Отменено.${NC}"; pause; return ;; esac
     make_backup
     killall guplugin 2>/dev/null
     for s in gearup-monitor gearup_restore; do
@@ -2266,16 +2271,16 @@ uninstall_gearup() {
     /etc/init.d/firewall restart
     /etc/init.d/network restart
     log_msg "OK gearup uninstalled"
-    echo -e "${GREEN}✅ GearUP удалён, дефолты firewall восстановлены (forward=REJECT).${NC}"
+    cecho "${GREEN}✅ GearUP удалён, дефолты firewall восстановлены (forward=REJECT).${NC}"
     pause
 }
 
 uninstall_awg() {
     header
-    uci -q get network.AWG >/dev/null 2>&1 || { echo -e "${RED}AmneziaWG (network.AWG) не найден.${NC}"; pause; return; }
-    echo -e "${RED}Удалить AmneziaWG? Удалятся интерфейс AWG, пиры и пакеты kmod-awg/luci-app-amneziawg. (y/N)${NC}"
+    uci -q get network.AWG >/dev/null 2>&1 || { cecho "${RED}AmneziaWG (network.AWG) не найден.${NC}"; pause; return; }
+    cecho "${RED}Удалить AmneziaWG? Удалятся интерфейс AWG, пиры и пакеты kmod-awg/luci-app-amneziawg. (y/N)${NC}"
     read -p "Ответ: " a
-    case "$a" in y|Y) ;; *) echo -e "${YELLOW}Отменено.${NC}"; pause; return ;; esac
+    case "$a" in y|Y) ;; *) cecho "${YELLOW}Отменено.${NC}"; pause; return ;; esac
     make_backup
     ifdown AWG 2>/dev/null
     while true; do
@@ -2289,14 +2294,14 @@ uninstall_awg() {
     rm -rf /etc/amnezia 2>/dev/null
     /etc/init.d/network restart
     log_msg "OK awg uninstalled"
-    echo -e "${GREEN}✅ AmneziaWG удалён.${NC}"
+    cecho "${GREEN}✅ AmneziaWG удалён.${NC}"
     pause
 }
 
 menu_uninstall() {
     while true; do
         header
-        echo -e "${CYAN}=== Удаление компонентов ===${NC}"
+        cecho "${CYAN}=== Удаление компонентов ===${NC}"
         echo "1) Podkop"
         echo "2) Zapret (+ Zapret-Manager)"
         echo "3) GearUP Booster (плагин + монитор + восстановление)"
@@ -2304,7 +2309,7 @@ menu_uninstall() {
         echo "5) Watchdog Podkop"
         echo "6) Медиа-сортировщик"
         echo ""
-        echo -e "${YELLOW}Enter — Назад${NC}"
+        cecho "${YELLOW}Enter — Назад${NC}"
         choice=$(read_choice)
         case "$choice" in
             "") break ;;
@@ -2314,7 +2319,7 @@ menu_uninstall() {
             4) uninstall_awg ;;
             5) uninstall_podkop_watchdog ;;
             6) media_organizer_uninstall ;;
-            *) echo -e "${RED}Неверный выбор.${NC}" ;;
+            *) cecho "${RED}Неверный выбор.${NC}" ;;
         esac
     done
 }
@@ -2322,23 +2327,23 @@ menu_uninstall() {
 # ====================== Диагностика: «почему не работает» ======================
 run_diagnostics() {
     header
-    echo -e "${CYAN}=== Диагностика ===${NC}"
+    cecho "${CYAN}=== Диагностика ===${NC}"
     echo ""
     PROB=0
 
     # 1. Сырой интернет (без DNS)
     if ping -c 1 -W 3 1.1.1.1 >/dev/null 2>&1 || ping -c 1 -W 3 8.8.8.8 >/dev/null 2>&1; then
-        echo -e "${GREEN}✅ Интернет (ICMP до внешних IP) есть${NC}"
+        cecho "${GREEN}✅ Интернет (ICMP до внешних IP) есть${NC}"
     else
-        echo -e "${RED}❌ Нет пинга до внешних IP — кабель/провайдер, либо весь трафик уходит в нерабочий прокси${NC}"
+        cecho "${RED}❌ Нет пинга до внешних IP — кабель/провайдер, либо весь трафик уходит в нерабочий прокси${NC}"
         PROB=$((PROB + 1))
     fi
 
     # 2. DNS
     if nslookup ya.ru >/dev/null 2>&1; then
-        echo -e "${GREEN}✅ DNS резолвится${NC}"
+        cecho "${GREEN}✅ DNS резолвится${NC}"
     else
-        echo -e "${RED}❌ DNS не резолвится (dnsmasq/прокси-резолвер?)${NC}"
+        cecho "${RED}❌ DNS не резолвится (dnsmasq/прокси-резолвер?)${NC}"
         PROB=$((PROB + 1))
     fi
 
@@ -2347,9 +2352,9 @@ run_diagnostics() {
 
     # 3. WAN-интерфейс
     if ubus call network.interface.wan status 2>/dev/null | grep -q '"up": *true'; then
-        echo -e "${GREEN}✅ WAN-интерфейс поднят${NC}"
+        cecho "${GREEN}✅ WAN-интерфейс поднят${NC}"
     else
-        echo -e "${RED}❌ WAN не поднят (pppoe/dhcp?)${NC}"
+        cecho "${RED}❌ WAN не поднят (pppoe/dhcp?)${NC}"
         PROB=$((PROB + 1))
     fi
 
@@ -2357,9 +2362,16 @@ run_diagnostics() {
     PODKOP_ON=0
     if podkop_alive; then
         PODKOP_ON=1
-        echo -e "${GREEN}✅ Podkop активен${NC}"
+        cecho "${GREEN}✅ Podkop активен${NC}"
     else
-        echo -e "${YELLOW}— Podkop не активен${NC}"
+        cecho "${YELLOW}— Podkop не активен${NC}"
+        # Остаточные правила: служба мертва, а ip rule/nft до сих пор
+        # заворачивают трафик в таблицу podkop — интернет «пропадает целиком»
+        if ip rule show 2>/dev/null | grep -q "lookup podkop"; then
+            cecho "${RED}❌ Podkop не работает, но его ip rule остались (lookup podkop) — трафик уходит в чёрную дыру${NC}"
+            cecho "${RED}   Лечение: остановить podkop и перезапустить firewall + network (или перезагрузить роутер).${NC}"
+            PROB=$((PROB + 1))
+        fi
     fi
 
     # 5. Zapret
@@ -2368,17 +2380,17 @@ run_diagnostics() {
         ZAPRET_INSTALLED=1
         if /etc/init.d/zapret status >/dev/null 2>&1 || pgrep -x nfqws >/dev/null 2>&1; then
             ZAPRET_ON=1
-            echo -e "${GREEN}✅ Zapret активен${NC}"
+            cecho "${GREEN}✅ Zapret активен${NC}"
         else
-            echo -e "${RED}❌ Zapret установлен, но не запущен${NC}"
+            cecho "${RED}❌ Zapret установлен, но не запущен${NC}"
             PROB=$((PROB + 1))
         fi
     fi
 
     # 6. Конфликт: оба перехватчика одновременно
     if [ "$PODKOP_ON" = "1" ] && [ "$ZAPRET_ON" = "1" ]; then
-        echo -e "${RED}❌ CONFLICT: Podkop и Zapret активны одновременно — двойной перехват трафика${NC}"
-        echo -e "${RED}   Оставьте один: Удаление компонентов (меню 12).${NC}"
+        cecho "${RED}❌ CONFLICT: Podkop и Zapret активны одновременно — двойной перехват трафика${NC}"
+        cecho "${RED}   Оставьте один: Удаление компонентов (меню 12).${NC}"
         PROB=$((PROB + 1))
     fi
 
@@ -2387,37 +2399,37 @@ run_diagnostics() {
     [ "$(uci -q get firewall.@defaults[0].flow_offloading)" = "1" ] && FO_ON=1
     [ "$(uci -q get firewall.@defaults[0].flow_offloading_hw)" = "1" ] && FO_ON=1
     if [ "$FO_ON" = "1" ] && [ "$ZAPRET_INSTALLED" = "1" ] && ! hw_offload_fix_applied; then
-        echo -e "${RED}❌ Включён offloading + Zapret БЕЗ FIX — обход не работает. Меню 3, пункт 4.${NC}"
+        cecho "${RED}❌ Включён offloading + Zapret БЕЗ FIX — обход не работает. Меню 3, пункт 4.${NC}"
         PROB=$((PROB + 1))
     fi
 
     # 8. QUIC — информация
     if quic_block_enabled; then
-        echo -e "${CYAN}ℹ️  QUIC заблокирован (нормально при использовании Zapret)${NC}"
+        cecho "${CYAN}ℹ️  QUIC заблокирован (нормально при использовании Zapret)${NC}"
     else
-        echo -e "${CYAN}ℹ️  QUIC не заблокирован${NC}"
+        cecho "${CYAN}ℹ️  QUIC не заблокирован${NC}"
     fi
 
     # 9. GitHub доступен? (все установки OUM идут оттуда)
     if wget -q -T 8 -O /dev/null "https://raw.githubusercontent.com/itdoginfo/podkop/main/install.sh" 2>/dev/null; then
-        echo -e "${GREEN}✅ GitHub доступен${NC}"
+        cecho "${GREEN}✅ GitHub доступен${NC}"
     else
-        echo -e "${YELLOW}⚠️  GitHub недоступен — при необходимости примените hosts-fix (меню 2, пункт 5)${NC}"
+        cecho "${YELLOW}⚠️  GitHub недоступен — при необходимости примените hosts-fix (меню 2, пункт 5)${NC}"
     fi
 
     # 10. Место в overlay (корневая ФС)
     USE=$(df -P / 2>/dev/null | tail -n 1 | awk '{print $5}' | tr -d '%')
     if [ -n "$USE" ] && [ "$USE" -ge 90 ]; then
-        echo -e "${RED}❌ Корневая ФС заполнена на ${USE}% — конфиги могут не сохраняться${NC}"
+        cecho "${RED}❌ Корневая ФС заполнена на ${USE}% — конфиги могут не сохраняться${NC}"
         PROB=$((PROB + 1))
     elif [ -n "$USE" ]; then
-        echo -e "${GREEN}✅ Корневая ФС занята на ${USE}%${NC}"
+        cecho "${GREEN}✅ Корневая ФС занята на ${USE}%${NC}"
     fi
 
     # 11. Свободная RAM
     MEMFREE=$(free 2>/dev/null | awk '/^Mem:/{print $4}')
     if [ -n "$MEMFREE" ] && [ "$MEMFREE" -lt 8192 ]; then
-        echo -e "${YELLOW}⚠️  Мало свободной RAM: ${MEMFREE} kB${NC}"
+        cecho "${YELLOW}⚠️  Мало свободной RAM: ${MEMFREE} kB${NC}"
     fi
 
     # 12. NAS-диск
@@ -2426,19 +2438,19 @@ run_diagnostics() {
         NASUSE=$(df -P "$NASDIR" 2>/dev/null | tail -n 1 | awk '{print $5}' | tr -d '%')
         if [ -n "$NASUSE" ]; then
             if [ "$NASUSE" -ge 95 ]; then
-                echo -e "${RED}❌ NAS-диск ($NASDIR) заполнен на ${NASUSE}%${NC}"
+                cecho "${RED}❌ NAS-диск ($NASDIR) заполнен на ${NASUSE}%${NC}"
                 PROB=$((PROB + 1))
             else
-                echo -e "${GREEN}✅ NAS-диск ($NASDIR) занят на ${NASUSE}%${NC}"
+                cecho "${GREEN}✅ NAS-диск ($NASDIR) занят на ${NASUSE}%${NC}"
             fi
         fi
     fi
 
     echo ""
     if [ "$PROB" -eq 0 ]; then
-        echo -e "${GREEN}✅ Явных проблем не найдено. Если не открывается конкретный сайт — проверьте его на другом устройстве/через прокси.${NC}"
+        cecho "${GREEN}✅ Явных проблем не найдено. Если не открывается конкретный сайт — проверьте его на другом устройстве/через прокси.${NC}"
     else
-        echo -e "${RED}⚠️  Найдено проблем: $PROB — см. рекомендации выше.${NC}"
+        cecho "${RED}⚠️  Найдено проблем: $PROB — см. рекомендации выше.${NC}"
     fi
     log_msg "diagnostics run: problems=$PROB"
 }
@@ -2447,35 +2459,35 @@ run_diagnostics() {
 menu_restore() {
     header
     if ! ls "$BACKUP_DIR"/oum_backup_*.tar.gz >/dev/null 2>&1; then
-        echo -e "${YELLOW}Бэкапов пока нет: $BACKUP_DIR пуст.${NC}"
+        cecho "${YELLOW}Бэкапов пока нет: $BACKUP_DIR пуст.${NC}"
         pause
         return
     fi
-    echo -e "${CYAN}=== Восстановление бэкапа ===${NC}"
+    cecho "${CYAN}=== Восстановление бэкапа ===${NC}"
     ls -1t "$BACKUP_DIR"/oum_backup_*.tar.gz | while IFS= read -r f; do
         echo "  $(basename "$f")  ($(du -h "$f" | cut -f1))"
     done
     echo ""
-    echo -e "${YELLOW}ВНИМАНИЕ: конфигурация вернётся к состоянию на момент бэкапа, роутер ПЕРЕЗАГРУЗИТСЯ.${NC}"
+    cecho "${YELLOW}ВНИМАНИЕ: конфигурация вернётся к состоянию на момент бэкапа, роутер ПЕРЕЗАГРУЗИТСЯ.${NC}"
     echo "Введите имя файла (полностью, как выше), 'd' — удалить все бэкапы, Enter — отмена:"
     read -p "Выбор: " sel
     [ -z "$sel" ] && return
     if [ "$sel" = "d" ]; then
         rm -f "$BACKUP_DIR"/oum_backup_*.tar.gz
-        echo -e "${GREEN}✅ Все бэкапы удалены.${NC}"
+        cecho "${GREEN}✅ Все бэкапы удалены.${NC}"
         log_msg "all backups deleted"
         pause
         return
     fi
     FILE="$BACKUP_DIR/$sel"
     if [ ! -f "$FILE" ]; then
-        echo -e "${RED}❌ Файл не найден: $FILE${NC}"
+        cecho "${RED}❌ Файл не найден: $FILE${NC}"
         pause
         return
     fi
     read -p "Введите YES для подтверждения: " c
-    [ "$c" = "YES" ] || { echo -e "${YELLOW}Отменено.${NC}"; pause; return; }
-    echo -e "${YELLOW}Восстанавливаем $FILE и перезагружаемся...${NC}"
+    [ "$c" = "YES" ] || { cecho "${YELLOW}Отменено.${NC}"; pause; return; }
+    cecho "${YELLOW}Восстанавливаем $FILE и перезагружаемся...${NC}"
     log_msg "restore from $sel"
     sysupgrade -r "$FILE" && sleep 3 && reboot
 }
@@ -2497,33 +2509,33 @@ CONFEOF
     # Если URL не задан в конфиге — используем официальный репозиторий
     [ -z "$OUM_UPDATE_URL" ] && OUM_UPDATE_URL="$OUM_REPO_URL"
     if [ -z "$OUM_UPDATE_URL" ]; then
-        echo -e "${YELLOW}URL обновления не задан.${NC}"
+        cecho "${YELLOW}URL обновления не задан.${NC}"
         echo "Залейте oum.sh в свой репозиторий и впишите в /etc/oum/oum.conf:"
         echo "  OUM_UPDATE_URL=https://raw.githubusercontent.com/USERNAME/REPO/main/oum.sh"
         pause
         return
     fi
-    echo -e "${YELLOW}Проверяем обновления...${NC}"
+    cecho "${YELLOW}Проверяем обновления...${NC}"
     if ! fetch_file "$OUM_UPDATE_URL" /tmp/oum_new.sh || [ ! -s /tmp/oum_new.sh ]; then
-        echo -e "${RED}❌ Не удалось скачать обновление.${NC}"
+        cecho "${RED}❌ Не удалось скачать обновление.${NC}"
         pause
         return
     fi
     if head -c 200 /tmp/oum_new.sh | grep -qi "<html"; then
-        echo -e "${RED}❌ По URL вернулся HTML вместо скрипта — проверьте OUM_UPDATE_URL.${NC}"
+        cecho "${RED}❌ По URL вернулся HTML вместо скрипта — проверьте OUM_UPDATE_URL.${NC}"
         pause
         return
     fi
     NEWV=$(grep -o 'OUM v[0-9][0-9.]*' /tmp/oum_new.sh | head -n1 | sed 's/OUM v//')
     if [ -z "$NEWV" ]; then
-        echo -e "${RED}❌ Не удалось определить версию в скачанном файле — это точно oum.sh?${NC}"
+        cecho "${RED}❌ Не удалось определить версию в скачанном файле — это точно oum.sh?${NC}"
         pause
         return
     fi
     echo "Текущая версия:  v$OUM_VERSION"
     echo "Доступная:       v$NEWV"
     if [ "$NEWV" = "$OUM_VERSION" ]; then
-        echo -e "${GREEN}✅ У вас актуальная версия.${NC}"
+        cecho "${GREEN}✅ У вас актуальная версия.${NC}"
         pause
         return
     fi
@@ -2534,11 +2546,11 @@ CONFEOF
     esac
     SCRIPT_PATH=$(readlink -f "$0" 2>/dev/null || echo "$0")
     if cp "$SCRIPT_PATH" "${SCRIPT_PATH}.bak" && cp /tmp/oum_new.sh "$SCRIPT_PATH" && chmod +x "$SCRIPT_PATH"; then
-        echo -e "${GREEN}✅ OUM обновлён до v$NEWV. Старая версия: ${SCRIPT_PATH}.bak${NC}"
-        echo -e "${YELLOW}Перезапустите OUM, чтобы начать работу с новой версией.${NC}"
+        cecho "${GREEN}✅ OUM обновлён до v$NEWV. Старая версия: ${SCRIPT_PATH}.bak${NC}"
+        cecho "${YELLOW}Перезапустите OUM, чтобы начать работу с новой версией.${NC}"
         log_msg "OK self-update $OUM_VERSION -> $NEWV"
     else
-        echo -e "${RED}❌ Не удалось записать обновление (путь: $SCRIPT_PATH).${NC}"
+        cecho "${RED}❌ Не удалось записать обновление (путь: $SCRIPT_PATH).${NC}"
         log_msg "FAIL self-update write"
     fi
     pause
@@ -2547,8 +2559,8 @@ CONFEOF
 # ====================== Статус ======================
 menu_status() {
     header
-    echo -e "${CYAN}Статус системы:${NC}"
-    echo -e "Пакетный менеджер: ${GREEN}${PKG_MANAGER:-неизвестен}${NC}"
+    cecho "${CYAN}Статус системы:${NC}"
+    cecho "Пакетный менеджер: ${GREEN}${PKG_MANAGER:-неизвестен}${NC}"
     echo "Uptime/Load: $(uptime 2>/dev/null)"
     TEMP=$(cat /sys/class/thermal/thermal_zone0/temp 2>/dev/null)
     [ -n "$TEMP" ] && echo "Температура CPU: $((TEMP / 1000))°C"
@@ -2560,7 +2572,16 @@ menu_status() {
         df -h "$NASDIR" 2>/dev/null | tail -n 1 | awk '{print "NAS-диск: "$3" / "$2" ("$5") — "$6}'
     fi
     pgrep guplugin >/dev/null && echo "GearUP: ${GREEN}работает${NC}" || echo "GearUP: ${RED}не запущен${NC}"
-    /etc/init.d/podkop status >/dev/null 2>&1 && echo "Podkop: ${GREEN}активен${NC}" || echo "Podkop: ${RED}выключен/не найден${NC}"
+    if podkop_alive; then
+        echo "Podkop: ${GREEN}активен${NC}"
+    elif [ -f /etc/init.d/podkop ]; then
+        echo "Podkop: ${RED}остановлен${NC}"
+    else
+        echo "Podkop: ${YELLOW}не найден${NC}"
+    fi
+    if ! podkop_alive && ip rule show 2>/dev/null | grep -q "lookup podkop"; then
+        cecho "${RED}  ⚠️  Podkop не работает, но в ip rule осталась его таблица — возможна чёрная дыра трафика. Диагностика (меню 6 → 1).${NC}"
+    fi
     /etc/init.d/ksmbd status >/dev/null 2>&1 && echo "NAS (SMB): ${GREEN}активен${NC}" || echo "NAS (SMB): ${RED}выключен/не найден${NC}"
     if crontab -l 2>/dev/null | grep -q media-organizer-watch.sh; then
         if [ -s /etc/oum/tmdb_api_key ]; then
@@ -2627,7 +2648,7 @@ check_time_sync() {
     REMOTE=$(wget -S --spider -T 8 http://ya.ru 2>&1 | grep -i '^  Date:' | tail -n1 | sed 's/.*Date: //')
     [ -z "$REMOTE" ] && REMOTE=$(wget -S --spider -T 8 http://cloudflare.com 2>&1 | grep -i '^  Date:' | tail -n1 | sed 's/.*Date: //')
     if [ -z "$REMOTE" ]; then
-        echo -e "${YELLOW}⚠️  Не удалось получить точное время (нет сети?) — проверка пропущена.${NC}"
+        cecho "${YELLOW}⚠️  Не удалось получить точное время (нет сети?) — проверка пропущена.${NC}"
         return 0
     fi
     # Парсим RFC-датy: "Mon, 24 Aug 2026 14:30:05 GMT" -> YYYYmmddHHMMSS
@@ -2637,19 +2658,19 @@ check_time_sync() {
     RMON=$(echo "$REMOTE" | awk '{print $2}' | case $(echo "$REMOTE" | awk '{print $2}') in
         Jan) echo 01;; Feb) echo 02;; Mar) echo 03;; Apr) echo 04;; May) echo 05;; Jun) echo 06;;
         Jul) echo 07;; Aug) echo 08;; Sep) echo 09;; Oct) echo 10;; Nov) echo 11;; Dec) echo 12;; *) echo 00;; esac)
-    [ "$RMON" = "00" ] && { echo -e "${YELLOW}⚠️  Не распознана дата сервера ($REMOTE).${NC}"; return 0; }
+    [ "$RMON" = "00" ] && { cecho "${YELLOW}⚠️  Не распознана дата сервера ($REMOTE).${NC}"; return 0; }
     RNUM=$((RY * 10000000000 + RMON * 100000000 + RD * 1000000 + RT))
     HNUM=$(date -u +%Y%m%d%H%M%S)
     DIFF=$((HNUM - RNUM))
     [ "$DIFF" -lt 0 ] && DIFF=$((-DIFF))
     # > 300 секунд рассинхрона — HTTPS-сертификаты могут не приниматься
     if [ "$DIFF" -gt 300 ]; then
-        echo -e "${RED}❌ Время роутера рассинхронизировано на ${DIFF} сек — HTTPS/скачивания будут падать.${NC}"
-        echo -e "${YELLOW}   Лечится: System -> Time Synchronization в LuCI, или:/etc/init.d/sysntpd restart${NC}"
+        cecho "${RED}❌ Время роутера рассинхронизировано на ${DIFF} сек — HTTPS/скачивания будут падать.${NC}"
+        cecho "${YELLOW}   Лечится: System -> Time Synchronization в LuCI, или:/etc/init.d/sysntpd restart${NC}"
         log_msg "WARN time drift ${DIFF}s"
         return 1
     fi
-    echo -e "${GREEN}✅ Системное время синхронизировано (рассинхрон ${DIFF} сек).${NC}"
+    cecho "${GREEN}✅ Системное время синхронизировано (рассинхрон ${DIFF} сек).${NC}"
     return 0
 }
 
@@ -2699,7 +2720,7 @@ cli_mode() {
 oum_install_cmd() {
     header
     SCRIPT_PATH=$(readlink -f "$0" 2>/dev/null || echo "$0")
-    echo -e "${YELLOW}Текущий путь скрипта: $SCRIPT_PATH${NC}"
+    cecho "${YELLOW}Текущий путь скрипта: $SCRIPT_PATH${NC}"
     if [ "$SCRIPT_PATH" != "/usr/bin/oum" ]; then
         cp "$SCRIPT_PATH" /usr/bin/oum
         chmod +x /usr/bin/oum
@@ -2712,9 +2733,9 @@ oum_install_cmd() {
         echo "OUM_UPDATE_URL=$OUM_REPO_URL" >> /etc/oum/oum.conf
     fi
     log_msg "OK oum installed as /usr/bin/oum"
-    echo -e "${GREEN}✅ Готово. Теперь запускайте командой: oum${NC}"
-    echo -e "${CYAN}CLI-режим: oum status | oum diag | oum log | oum version${NC}"
-    echo -e "${CYAN}Самообновление: меню «Диагностика и обслуживание» → обновления OUM${NC}"
+    cecho "${GREEN}✅ Готово. Теперь запускайте командой: oum${NC}"
+    cecho "${CYAN}CLI-режим: oum status | oum diag | oum log | oum version${NC}"
+    cecho "${CYAN}Самообновление: меню «Диагностика и обслуживание» → обновления OUM${NC}"
     pause
 }
 
@@ -2738,7 +2759,7 @@ while true; do
     echo "7) Быстрый статус"
     echo "8) Установить команду oum (запуск без пути + CLI)"
     echo ""
-    echo -e "${YELLOW}Enter — Выход из скрипта${NC}"
+    cecho "${YELLOW}Enter — Выход из скрипта${NC}"
     choice=$(read_choice)
 
     case "$choice" in
@@ -2751,10 +2772,10 @@ while true; do
         7) menu_status ;;
         8) oum_install_cmd ;;
         "")
-            echo -e "${YELLOW}Выход из OUM? (Enter = да)${NC}"
+            cecho "${YELLOW}Выход из OUM? (Enter = да)${NC}"
             read -r confirm
-            [ -z "$confirm" ] && { echo -e "${GREEN}До свидания!${NC}"; exit 0; }
+            [ -z "$confirm" ] && { cecho "${GREEN}До свидания!${NC}"; exit 0; }
             ;;
-        *) echo -e "${RED}Неверный выбор.${NC}" ;;
+        *) cecho "${RED}Неверный выбор.${NC}" ;;
     esac
 done
