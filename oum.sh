@@ -2475,6 +2475,105 @@ run_diagnostics() {
         fi
     fi
 
+    # 13. Сквозной HTTPS: ICMP проходит, а TCP/TLS? (различает DPI/прокси
+    # от проблем линка)
+    if wget -q -T 8 --spider "https://ya.ru" 2>/dev/null; then
+        cecho "${GREEN}✅ HTTPS работает (ya.ru отвечает)${NC}"
+    else
+        cecho "${RED}❌ HTTPS до ya.ru не проходит при живом ICMP — режется TCP/DPI либо сломан прокси-перехват${NC}"
+        PROB=$((PROB + 1))
+    fi
+
+    # 14. End-to-end обход: открывается ли заблокированный ресурс
+    if [ "$PODKOP_ON" = "1" ] || [ "$ZAPRET_ON" = "1" ]; then
+        if wget -q -T 10 --spider "https://www.youtube.com" 2>/dev/null; then
+            cecho "${GREEN}✅ Обход работает end-to-end: YouTube доступен${NC}"
+        else
+            cecho "${RED}❌ Перехват активен, но YouTube НЕ открывается — обход не работает${NC}"
+            cecho "${RED}   (стратегия/DPI, конфиг sing-box, или заблокирован и прокси тоже)${NC}"
+            PROB=$((PROB + 1))
+        fi
+    fi
+
+    # 15. DNS: локальный резолвер против внешнего (1.1.1.1)
+    DNS_LOCAL=$(nslookup ya.ru 127.0.0.1 2>/dev/null | awk '/^Address:/{print $2}' | tail -n1)
+    DNS_EXT=$(nslookup ya.ru 1.1.1.1 2>/dev/null | awk '/^Address:/{print $2}' | tail -n1)
+    if [ -n "$DNS_LOCAL" ] && [ -n "$DNS_EXT" ]; then
+        cecho "${GREEN}✅ DNS: локальный и внешний резолвер отвечают${NC}"
+    elif [ -z "$DNS_LOCAL" ] && [ -n "$DNS_EXT" ]; then
+        cecho "${RED}❌ Локальный DNS (dnsmasq/127.0.0.1) не отвечает, внешний работает — клиенты без интернета при живом линке${NC}"
+        PROB=$((PROB + 1))
+        cecho "${RED}   Лечение: /etc/init.d/dnsmasq restart${NC}"
+    elif [ -z "$DNS_EXT" ]; then
+        cecho "${YELLOW}⚠️  Внешний DNS (1.1.1.1/53) недоступен — вероятно, провайдер режет UDP/53 (норма при DPI)${NC}"
+    fi
+
+    # 16. WAN IP + CGNAT (объясняет неработающие пробросы портов)
+    WAN_IP=$(ubus call network.interface.wan status 2>/dev/null | grep -o '"address": *"[0-9.]*"' | head -n1 | grep -o '[0-9.]\+$')
+    if [ -n "$WAN_IP" ]; then
+        CGNAT=0
+        case "$WAN_IP" in
+            100.6[4-9].*|100.[7-9][0-9].*|100.1[01][0-9].*|100.12[0-7].*) CGNAT=1 ;;
+            10.*|192.168.*|172.1[6-9].*|172.2[0-9].*|172.3[01].*) CGNAT=2 ;;
+        esac
+        if [ "$CGNAT" = "1" ]; then
+            cecho "${YELLOW}ℹ️  WAN IP: $WAN_IP — CGNAT (серый адрес), проброс портов наружу работать НЕ будет${NC}"
+        elif [ "$CGNAT" = "2" ]; then
+            cecho "${YELLOW}ℹ️  WAN IP: $WAN_IP — приватный (роутер за роутером?)${NC}"
+        else
+            cecho "${GREEN}✅ WAN IP: $WAN_IP (белый)${NC}"
+        fi
+    fi
+
+    # 17. Качество линии: потери пакетов до шлюза провайдера
+    GW=$(route -n 2>/dev/null | awk '$1=="0.0.0.0"{print $2; exit}')
+    if [ -n "$GW" ]; then
+        LOSS=$(ping -c 5 -W 2 "$GW" 2>/dev/null | awk -F, '/packet loss/{gsub(/%/,""); for(i=1;i<=NF;i++) if($i~/loss/) print $i}' | awk '{print $1}')
+        [ -z "$LOSS" ] && LOSS=100
+        if [ "$LOSS" -ge 20 ]; then
+            cecho "${RED}❌ Потери до шлюза $GW: ${LOSS}% — линия плохая, звать провайдера${NC}"
+            PROB=$((PROB + 1))
+        elif [ "$LOSS" -gt 0 ]; then
+            cecho "${YELLOW}⚠️  Потери до шлюза $GW: ${LOSS}% — терпимо, но следите${NC}"
+        else
+            cecho "${GREEN}✅ Линия до шлюза $GW: потерь нет${NC}"
+        fi
+    fi
+
+    # 18. Cron жив? (от него зависит watchdog и медиа-сортировщик)
+    if pgrep -x cron >/dev/null 2>&1 || pgrep -x crond >/dev/null 2>&1; then
+        cecho "${GREEN}✅ Cron работает${NC}"
+    else
+        cecho "${RED}❌ Cron не запущен — watchdog и сортировщик мертвы! /etc/init.d/cron start${NC}"
+        PROB=$((PROB + 1))
+    fi
+
+    # 19. Валидность конфига sing-box (если podkop активен)
+    if [ "$PODKOP_ON" = "1" ] && command -v sing-box >/dev/null 2>&1; then
+        SB_CONF=$(uci -q get sing-box.main.conffile)
+        if [ -n "$SB_CONF" ] && [ -f "$SB_CONF" ]; then
+            if sing-box check -c "$SB_CONF" >/dev/null 2>&1; then
+                cecho "${GREEN}✅ Конфиг sing-box валиден${NC}"
+            else
+                cecho "${RED}❌ Конфиг sing-box НЕВАЛИДЕН ($SB_CONF) — ядро не стартует/падает. Рестарт podkop или перенастройка.${NC}"
+                PROB=$((PROB + 1))
+            fi
+        fi
+    fi
+
+    # 20. Ошибки в системном логе (OOM, segfault)
+    ERRLOG=$(logread 2>/dev/null | tail -n 300 | grep -ciE "out of memory|oom-kill|segmentation fault")
+    if [ "$ERRLOG" -gt 0 ]; then
+        cecho "${YELLOW}⚠️  В системном логе $ERRLOG признак(ов) OOM/segfault — нехватка RAM или падающий процесс${NC}"
+    fi
+
+    # 21. Wi-Fi и клиенты (контекст)
+    RADIO_ON=$(uci show wireless 2>/dev/null | grep -c "disabled='0'")
+    RADIO_OFF=$(uci show wireless 2>/dev/null | grep -c "disabled='1'")
+    CLIENTS=0
+    [ -f /tmp/dhcp.leases ] && CLIENTS=$(wc -l < /tmp/dhcp.leases)
+    cecho "${CYAN}ℹ️  Wi-Fi: включено радио $RADIO_ON, выключено $RADIO_OFF; DHCP-клиентов: $CLIENTS${NC}"
+
     echo ""
     if [ "$PROB" -eq 0 ]; then
         cecho "${GREEN}✅ Явных проблем не найдено. Если не открывается конкретный сайт — проверьте его на другом устройстве/через прокси.${NC}"
